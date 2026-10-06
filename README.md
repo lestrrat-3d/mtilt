@@ -37,6 +37,11 @@ span: 41 and 37 pillars.
 
 ![A bridge with its span held up by gold pillars](docs/images/bridge-kept.png)
 
+The ⊐-shaped part, kept upright, has an arm over its own base, so no straight pillar reaches the arm. Branches stand
+beside the base and lean in under it.
+
+![A C-shaped part whose top arm is held by gold branches that lean in from beside its base](docs/images/occluded-kept.png)
+
 ## What it does now
 
 - Takes one connected solid decad body (millimeters, +Z up, plate at Z = 0). It refuses a body that is not a
@@ -56,8 +61,11 @@ span: 41 and 37 pillars.
 - For the selected candidate only, adds the moved model (`PlacedCopy`; the input stays live) and one revolved
   pillar body per support to the input's document. It then runs decad's `Verify`, requires that none of these
   bodies interfere and that each is a valid solid, and re-checks the pillars on their tessellations.
-- Fails with a reason, and adds no bodies, when no candidate can be supported. An overhang above another part of
-  the model is one such case, because no pillar rooted on the plate can reach it.
+- Reaches an overhang above another part of the model with a **branch**: a support whose foot stands beside that
+  part on the plate and which leans in, at most `max_branch_lean_deg` (40 degrees in the example profile), to the
+  overhang. Each branch is one decad body, a tapered 16-sided sweep. Branches do not merge into trunks yet.
+- Fails with a reason, and adds no bodies, when no candidate can be supported. If decad's final check fails after
+  the bodies were built, mtilt removes them from the document again.
 
 The full scope, algorithms and limits are in [docs/design.md](docs/design.md). Planned work is in
 [docs/roadmap.md](docs/roadmap.md).

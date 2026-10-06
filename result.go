@@ -33,9 +33,9 @@ var (
 	// more than one lump.
 	ErrUnsupportedInput = errors.New("mtilt: unsupported input")
 	// ErrAssembly reports that the support bodies built for the selected
-	// candidate failed decad's verification. The bodies stay live in the
-	// input body's document (decad has no way to remove them), and the
-	// FailureError's Result holds them.
+	// candidate failed decad's verification. Prepare removes them from the
+	// document again (decad.Document.Remove); the FailureError's Result still
+	// holds them, readable but retired.
 	ErrAssembly = errors.New("mtilt: support assembly failed verification")
 	// ErrNoFeasibleCandidate reports that no evaluated orientation got a
 	// complete, validated set of supports within the work limits.
@@ -222,7 +222,13 @@ type ModelReport struct {
 
 // SupportReport describes one support body.
 type SupportReport struct {
-	ID         string        `json:"id"`
+	ID string `json:"id"`
+	// Kind is "pillar" or "branch". A branch\'s foot stands at FootMM on
+	// the plate; its vertical shaft ends at KneeZMM, where it leans toward
+	// CenterMM.
+	Kind       string        `json:"kind"`
+	FootMM     *[2]float64   `json:"foot_mm,omitempty"`
+	KneeZMM    *float64      `json:"knee_z_mm,omitempty"`
 	CenterMM   [2]float64    `json:"center_mm"`
 	SurfaceZMM float64       `json:"held_surface_z_mm"`
 	TopZMM     float64       `json:"top_z_mm"`

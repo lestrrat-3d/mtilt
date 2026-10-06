@@ -33,10 +33,12 @@ const (
 //   - support_model_contact: no support triangle touches a model triangle.
 //   - support_top_gap: the model's lowest point over each support's top
 //     face is at least gap above that face, less allowance.
-//   - support_separation: the XY bounding boxes of the supports are
-//     pairwise disjoint. A pillar lies inside the vertical prism over its
-//     XY bounding box, so disjoint boxes mean disjoint bodies.
-func ValidateAssembly(ctx context.Context, model *mesh.Mesh, supports []*mesh.Mesh, gap, allowance float64, tol mesh.Tolerance) ([]mesh.Check, error) {
+//   - support_separation: the XY bounding boxes of the upright supports
+//     (upright[i] true: straight pillars) are pairwise disjoint. A pillar lies
+//     inside the vertical prism over its XY bounding box, so disjoint boxes
+//     mean disjoint bodies. A leaning branch has no such prism; its distance
+//     from other supports is checked while planning and by decad's Verify.
+func ValidateAssembly(ctx context.Context, model *mesh.Mesh, supports []*mesh.Mesh, upright []bool, gap, allowance float64, tol mesh.Tolerance) ([]mesh.Check, error) {
 	ix := newIndex(model)
 	var topology, plate, contact, topGap []string
 	boxes := make([]mesh.Box, len(supports))
@@ -73,15 +75,19 @@ func ValidateAssembly(ctx context.Context, model *mesh.Mesh, supports []*mesh.Me
 			x1, y1 = math.Max(x1, v.X), math.Max(y1, v.Y)
 		}
 		half := math.Max(x1-x0, y1-y0) / 2
-		above := ix.lowestOver((x0+x1)/2, (y0+y1)/2, half)
+		// Only the model above the top face counts; a branch's top face
+		// can stand over a lower part of the model.
+		above := ix.lowestOverAbove((x0+x1)/2, (y0+y1)/2, half, top-allowance-tol.Length)
 		if above-top < gap-allowance-tol.Length {
 			topGap = append(topGap, fmt.Sprintf("%s: %g mm below the model, needs %g", name, above-top, gap))
 		}
 	}
 
-	order := make([]int, len(boxes))
-	for i := range order {
-		order[i] = i
+	var order []int
+	for i := range boxes {
+		if upright[i] {
+			order = append(order, i)
+		}
 	}
 	slices.SortFunc(order, func(a, b int) int { return cmp.Compare(boxes[a].Min.X, boxes[b].Min.X) })
 	var overlap []string

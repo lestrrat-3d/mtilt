@@ -9,37 +9,27 @@ Run the calibration procedure in [validation.md](validation.md) on at least one 
 Record the results there, and either calibrate `profiles/example-fdm.json` (including `plate_anchor_height_mm`
 and the strength weight) or add a calibrated profile beside it with `"calibrated": true`.
 
-## 2. STL input through decad
-
-Mesh import belongs in decad. Once decad can turn an STL file into a body, mtilt accepts such bodies through the
-same `Prepare` call.
-
-## 3. Assembly export
+## 2. Assembly export
 
 Write the model and supports as separate objects in one 3MF package through decad's exporter. The 3MF core
 specification lets a consumer ignore or replace objects typed as `support`, so test each target slicer before
 choosing between `support` and `model` object types.
 
-## 4. Better orientation search
+## 3. Better orientation search
 
 Make the support estimate see occlusion (cast the column under each overhang against the model) so fewer
 finalists fail planning, and turn the part about the vertical axis to fit rectangular build volumes. Both change
 `internal/orient/search.go` only.
 
-## 5. Removal accessibility
+## 4. Removal accessibility
 
 Check that each support can be reached from outside the part's convex hull, and report trapped supports.
 
-## 6. Supports rooted on the model
-
-Allow pillars that stand on an upward-facing model surface, with their own contact gap at the base. This would
-cover the occluded case that fails today.
-
-## 7. Tree supports and support optimization
+## 5. Tree supports: merged trunks
 
 Branching supports that share trunks. This needs milestones 5 and 6 first.
 
 ## Out of scope until requested
 
-G-code generation, printer control, a GUI, network services, GPU acceleration, automatic mesh repair, model
+Supports rooted on the model (decided against: supports stand on the build plate only), G-code generation, printer control, a GUI, network services, GPU acceleration, automatic mesh repair, model
 splitting, load or layer-adhesion simulation, soluble or resin supports, and a slicer-profile database.

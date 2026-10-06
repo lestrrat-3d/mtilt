@@ -48,6 +48,7 @@ func TestProfile(t *testing.T) {
 		"threshold of 90":                   func(p *mtilt.Profile) { p.OverhangThreshold = 90 },
 		"negative anchor":                   func(p *mtilt.Profile) { p.PlateAnchorMM = -1 },
 		"negative bridge":                   func(p *mtilt.Profile) { p.MaxBridgeMM = -1 },
+		"branch lean over the walls' limit": func(p *mtilt.Profile) { p.MaxBranchLeanDeg = 90 - p.OverhangThreshold + 1 },
 		"bridge tilt at the threshold":      func(p *mtilt.Profile) { p.MaxBridgeTiltDeg = p.OverhangThreshold },
 		"zero gap":                          func(p *mtilt.Profile) { p.TopContactGapMM = 0 },
 		"margin too large":                  func(p *mtilt.Profile) { p.BuildVolume = &mtilt.BuildVolume{XMM: 10, YMM: 10, ZMM: 10, MarginMM: 5} },

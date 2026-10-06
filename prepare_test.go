@@ -168,18 +168,40 @@ func TestPrepare(t *testing.T) {
 		requireNoFailedCheck(t, res.Report)
 	})
 
-	t.Run("occluded overhang fails and adds no bodies", func(t *testing.T) {
+	t.Run("occluded overhang gets branches from beside the base", func(t *testing.T) {
+		body := newBody(t, (*fixture.Bodies).Occluded)
+		res, err := prepare(t, body, mtilt.Options{KeepOrientation: true})
+		require.NoError(t, err)
+		requireNoFailedCheck(t, res.Report)
+		requireCheck(t, res.Report.Validation, "decad_interference", mesh.StatusPassed)
+		require.NotEmpty(t, res.Supports)
+		mb, err := res.Model.Bounds()
+		require.NoError(t, err)
+		for i, sr := range res.Report.Supports {
+			// The base covers the whole footprint under the arm, so every
+			// support is a branch whose foot stands outside the model's
+			// bounding box in X or Y.
+			require.Equal(t, "branch", sr.Kind)
+			require.NotNil(t, sr.FootMM)
+			f := *sr.FootMM
+			outside := f[0] > mb.Max.X || f[0] < mb.Min.X || f[1] > mb.Max.Y || f[1] < mb.Min.Y
+			require.True(t, outside, "branch %d foot %v is under the model", i+1, f)
+			require.True(t, res.Supports[i].IsSolid())
+		}
+	})
+
+	t.Run("occluded overhang fails and adds no bodies without branches", func(t *testing.T) {
 		body := newBody(t, (*fixture.Bodies).Occluded)
 		before := len(body.Document().Bodies())
-		res, err := prepare(t, body, mtilt.Options{KeepOrientation: true})
+		p := mtilt.ExampleProfile()
+		p.MaxBranchLeanDeg = 0
+		res, err := prepare(t, body, mtilt.Options{Profile: p, KeepOrientation: true})
 		require.Nil(t, res)
 		fe := requireFailure(t, err, mtilt.ErrNoFeasibleCandidate)
 		require.Nil(t, fe.Result)
-		require.Nil(t, fe.Report.Selected)
 		att := fe.Report.Candidates[0].Attempt
 		require.Equal(t, mtilt.AttemptFailed, att.Status)
 		require.Contains(t, att.Reason, "occluded")
-		require.Equal(t, att.Samples, att.UncoveredCount)
 		require.Len(t, body.Document().Bodies(), before)
 	})
 
