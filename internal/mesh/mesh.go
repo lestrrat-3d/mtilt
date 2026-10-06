@@ -1,12 +1,10 @@
-// Package mesh holds mtilt's indexed triangle mesh, the geometry measurements
-// taken from it, and the checks that decide whether a mesh is a supported
-// input.
+// Package mesh holds the indexed triangle mesh mtilt plans on: the
+// tessellation of a decad body (FromBody), the geometry measurements taken
+// from it, and the topology checks run on it.
 //
-// Coordinates are float64 millimeters in a right-handed frame once a mesh has
-// gone through unit conversion; the package itself attaches no unit to a
-// coordinate. A triangle's normal is always computed from its winding (the
-// right-hand rule over its vertex order). Normals stored in an input file are
-// never read.
+// Coordinates are float64 millimeters in a right-handed frame. A triangle's
+// normal is always computed from its winding (the right-hand rule over its
+// vertex order).
 package mesh
 
 import (
@@ -97,20 +95,6 @@ func (m *Mesh) Transformed(t r3.Transform) *Mesh {
 	return out
 }
 
-// Scaled returns a copy of m with every coordinate multiplied by k. It is the
-// one place mtilt changes the size of a model, and it is only used to convert
-// input units to millimeters. k must be positive and finite.
-func (m *Mesh) Scaled(k float64) *Mesh {
-	out := &Mesh{
-		Vertices:  make([]r3.Vec, len(m.Vertices)),
-		Triangles: append([][3]uint32(nil), m.Triangles...),
-	}
-	for i, v := range m.Vertices {
-		out.Vertices[i] = v.Scale(k)
-	}
-	return out
-}
-
 // Box is an axis-aligned bounding box.
 type Box struct {
 	Min, Max r3.Vec
@@ -177,6 +161,62 @@ func (m *Mesh) Centroid() r3.Vec {
 		acc = acc.Add(t[0].Add(t[1]).Add(t[2]).Scale(v))
 	}
 	return acc.Scale(1 / (4 * vol))
+}
+
+// InertiaTensor is a symmetric inertia tensor: the diagonal (XX, YY, ZZ) and
+// the products (XY, XZ, YZ) with the physical minus sign, so the matrix is
+// [[XX, XY, XZ], [XY, YY, YZ], [XZ, YZ, ZZ]].
+type InertiaTensor struct {
+	XX, YY, ZZ, XY, XZ, YZ float64
+}
+
+// Inertia returns the inertia tensor of the solid the mesh encloses, at unit
+// density, about its volume centroid, in world axes. Units are mm^5 (mm^3 of
+// volume times mm^2). It assumes a closed, outward-wound mesh.
+//
+// Each triangle and the origin span a signed tetrahedron whose second-moment
+// matrix is det(A) A K A^T with A = [a b c] and K the canonical tetrahedron's
+// matrix (2 on the diagonal, 1 off it, over 120); the sum, shifted to the
+// centroid, is the covariance C, and the inertia is trace(C) I - C.
+func (m *Mesh) Inertia() InertiaTensor {
+	var c [3][3]float64
+	var vol float64
+	var first r3.Vec
+	for i := range m.Triangles {
+		t := m.Triangle(i)
+		d := t[0].Dot(t[1].Cross(t[2]))
+		vol += d / 6
+		first = first.Add(t[0].Add(t[1]).Add(t[2]).Scale(d / 24))
+		cols := [3][3]float64{
+			{t[0].X, t[1].X, t[2].X},
+			{t[0].Y, t[1].Y, t[2].Y},
+			{t[0].Z, t[1].Z, t[2].Z},
+		}
+		for r := range 3 {
+			for s := range 3 {
+				// (A K A^T)[r][s] = (sum_k A[r][k] A[s][k] + (sum_k A[r][k]) (sum_k A[s][k])) / 120
+				var dot float64
+				for k := range 3 {
+					dot += cols[r][k] * cols[s][k]
+				}
+				sr := cols[r][0] + cols[r][1] + cols[r][2]
+				ss := cols[s][0] + cols[s][1] + cols[s][2]
+				c[r][s] += d * (dot + sr*ss) / 120
+			}
+		}
+	}
+	if vol == 0 {
+		return InertiaTensor{}
+	}
+	ctr := first.Scale(1 / vol)
+	cv := [3]float64{ctr.X, ctr.Y, ctr.Z}
+	for r := range 3 {
+		for s := range 3 {
+			c[r][s] -= vol * cv[r] * cv[s]
+		}
+	}
+	tr := c[0][0] + c[1][1] + c[2][2]
+	return InertiaTensor{XX: tr - c[0][0], YY: tr - c[1][1], ZZ: tr - c[2][2], XY: -c[0][1], XZ: -c[0][2], YZ: -c[1][2]}
 }
 
 // TriangleArea returns the area of t.

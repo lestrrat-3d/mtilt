@@ -7,7 +7,7 @@ import (
 	"math"
 	"slices"
 
-	"github.com/lestrrat-3d/mtilt/mesh"
+	"github.com/lestrrat-3d/mtilt/internal/mesh"
 )
 
 // Names of the checks ValidateAssembly and RecheckPlan report.

@@ -1,13 +1,10 @@
-// Package fixture builds the synthetic meshes mtilt's tests and the files in
-// testdata/ are made from. Every shape is a closed, outward-wound mesh with
-// known dimensions, built in millimeters.
+// Package fixture builds mtilt's synthetic test shapes with known dimensions,
+// in millimeters: as triangle soups for the mesh-level packages, and as decad
+// bodies (bodies.go) for the pipeline.
 package fixture
 
 import (
-	"fmt"
 	"math"
-	"strconv"
-	"strings"
 
 	"github.com/lestrrat-3d/r3"
 	"github.com/lestrrat-3d/units"
@@ -78,14 +75,21 @@ func ObliqueCuboid() [][3]r3.Vec {
 // orientation given, the arm's underside is a 30 x 20 mm horizontal
 // overhang at Z = 30 with nothing below it.
 func Bracket() [][3]r3.Vec {
-	return Prism([][2]float64{{0, 0}, {10, 0}, {10, 30}, {40, 30}, {40, 40}, {0, 40}}, 0, 20)
+	return Prism(bracketProfile, 0, 20)
 }
+
+// XZ profiles of the extruded fixtures, shared by the soup and body builders.
+var (
+	bracketProfile  = [][2]float64{{0, 0}, {10, 0}, {10, 30}, {40, 30}, {40, 40}, {0, 40}}
+	bridgeProfile   = [][2]float64{{0, 0}, {10, 0}, {10, 30}, {40, 30}, {40, 0}, {50, 0}, {50, 40}, {0, 40}}
+	occludedProfile = [][2]float64{{0, 0}, {40, 0}, {40, 10}, {10, 10}, {10, 40}, {40, 40}, {40, 50}, {0, 50}}
+)
 
 // Bridge returns a Π-shaped part, 20 mm deep along Y: posts at X 0..10 and
 // X 40..50, joined by a beam at Z 30..40. The beam's underside between the
 // posts is a 30 x 20 mm horizontal span at Z = 30 with nothing below it.
 func Bridge() [][3]r3.Vec {
-	return Prism([][2]float64{{0, 0}, {10, 0}, {10, 30}, {40, 30}, {40, 0}, {50, 0}, {50, 40}, {0, 40}}, 0, 20)
+	return Prism(bridgeProfile, 0, 20)
 }
 
 // Occluded returns a ⊐-shaped part, 20 mm deep along Y: a base at Z 0..10, a
@@ -94,7 +98,7 @@ func Bridge() [][3]r3.Vec {
 // support, and the base lies directly below it, so no support rooted on the
 // build plate can reach it.
 func Occluded() [][3]r3.Vec {
-	return Prism([][2]float64{{0, 0}, {40, 0}, {40, 10}, {10, 10}, {10, 40}, {40, 40}, {40, 50}, {0, 50}}, 0, 20)
+	return Prism(occludedProfile, 0, 20)
 }
 
 // Prism extrudes a simple polygon in the XZ plane from Y = y0 to Y = y1. The
@@ -178,24 +182,4 @@ func anyInside(poly [][2]float64, idx []int, a, b, c int) bool {
 		}
 	}
 	return false
-}
-
-// ASCII renders tris as an ASCII STL file named name. Coordinates are
-// written with the shortest decimal text that parses back to the same
-// float64. Facet normals are computed from the winding.
-func ASCII(name string, tris [][3]r3.Vec) string {
-	var sb strings.Builder
-	num := func(v float64) string { return strconv.FormatFloat(v, 'g', -1, 64) }
-	vec := func(v r3.Vec) string { return num(v.X) + " " + num(v.Y) + " " + num(v.Z) }
-	fmt.Fprintf(&sb, "solid %s\n", name)
-	for _, t := range tris {
-		n, _ := t[1].Sub(t[0]).Cross(t[2].Sub(t[0])).Normalize()
-		fmt.Fprintf(&sb, "  facet normal %s\n    outer loop\n", vec(n))
-		for _, v := range t {
-			fmt.Fprintf(&sb, "      vertex %s\n", vec(v))
-		}
-		sb.WriteString("    endloop\n  endfacet\n")
-	}
-	fmt.Fprintf(&sb, "endsolid %s\n", name)
-	return sb.String()
 }

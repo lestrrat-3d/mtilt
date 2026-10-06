@@ -5,8 +5,8 @@ import (
 	"math"
 	"slices"
 
+	"github.com/lestrrat-3d/mtilt/internal/mesh"
 	"github.com/lestrrat-3d/mtilt/internal/overhang"
-	"github.com/lestrrat-3d/mtilt/mesh"
 	"github.com/lestrrat-3d/r3"
 )
 
@@ -58,6 +58,9 @@ type Metrics struct {
 	// SupportDemandProjectedAreaMM2 is the same triangles' area projected
 	// onto the build plate.
 	SupportDemandProjectedAreaMM2 float64 `json:"support_demand_projected_area_mm2"`
+	// AnchoredAreaMM2 is the area of overhang triangles within the
+	// plate-anchor height (overhang.Anchored); they need no support.
+	AnchoredAreaMM2 float64 `json:"anchored_area_mm2"`
 	// BedContactAreaMM2 is the area of the triangles lying on the build
 	// plate (overhang.BedContact). It is the model's actual contact
 	// geometry, not its bounding-box footprint.
@@ -71,11 +74,23 @@ type Metrics struct {
 	// the contact hull's edge: positive inside, negative outside. Nil with
 	// CentroidOverContact.
 	ContactHullMarginMM *float64 `json:"contact_hull_margin_mm"`
+	// LongAxisElevationDeg is the angle between the body's long axis
+	// (Principal.Axes[0], rotated with the candidate) and the build plate:
+	// 0 when the long axis lies flat, 90 when it stands up. Measure leaves
+	// it 0; the caller sets it with LongAxisElevation.
+	LongAxisElevationDeg float64 `json:"long_axis_elevation_deg"`
+}
+
+// LongAxisElevation returns the elevation in degrees of pr's long axis after
+// rot.
+func LongAxisElevation(pr Principal, rot r3.Transform) float64 {
+	return ElevationDeg(rot.ApplyDir(pr.Axes[0]))
 }
 
 // Measure computes the metrics of a placed model. thresholdDeg is the
-// overhang threshold and tol the model's numeric tolerances.
-func Measure(placed *mesh.Mesh, thresholdDeg float64, tol mesh.Tolerance) Metrics {
+// overhang threshold, anchorMM the plate-anchor height, and tol the model's
+// numeric tolerances.
+func Measure(placed *mesh.Mesh, thresholdDeg, anchorMM float64, tol mesh.Tolerance) Metrics {
 	b := placed.Bounds()
 	met := Metrics{
 		HeightMM:    b.Max.Z,
@@ -84,13 +99,15 @@ func Measure(placed *mesh.Mesh, thresholdDeg float64, tol mesh.Tolerance) Metric
 	var contact []r3.Vec
 	for i := range placed.Triangles {
 		t := placed.Triangle(i)
-		switch overhang.Classify(t, thresholdDeg, tol.Plate) {
+		switch overhang.Classify(t, thresholdDeg, tol.Plate, anchorMM) {
 		case overhang.Demand:
 			met.SupportDemandAreaMM2 += mesh.TriangleArea(t)
 			met.SupportDemandProjectedAreaMM2 += projectedArea(t)
 		case overhang.BedContact:
 			met.BedContactAreaMM2 += mesh.TriangleArea(t)
 			contact = append(contact, t[0], t[1], t[2])
+		case overhang.Anchored:
+			met.AnchoredAreaMM2 += mesh.TriangleArea(t)
 		case overhang.None:
 		}
 	}

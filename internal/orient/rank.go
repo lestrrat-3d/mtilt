@@ -12,6 +12,7 @@ type Weights struct {
 	SupportDemand float64 `json:"support_demand"`
 	Height        float64 `json:"height"`
 	BedContact    float64 `json:"bed_contact"`
+	Strength      float64 `json:"strength"`
 }
 
 // Scale holds the per-model quantities that turn metrics into dimensionless
@@ -22,6 +23,8 @@ type Scale struct {
 	// SizeMM is twice the largest distance from the model's volume
 	// centroid to a vertex.
 	SizeMM float64 `json:"size_mm"`
+	// Elongation is the model's Principal.Elongation.
+	Elongation float64 `json:"elongation"`
 }
 
 // Terms are the weighted, dimensionless objective terms of one candidate.
@@ -35,6 +38,12 @@ type Terms struct {
 	// BedContact is minus Weights.BedContact times the bed-contact area
 	// over the surface area, so more contact lowers the score.
 	BedContact float64 `json:"bed_contact"`
+	// Strength is Weights.Strength times the elongation times the squared
+	// sine of the long axis's elevation: 0 when the long axis lies flat or
+	// the model has no long axis, largest when a slender model stands up.
+	// FDM parts are weakest across layer lines, and a long part standing up
+	// puts every layer line across its length.
+	Strength float64 `json:"strength"`
 }
 
 // Score returns the weighted terms of m and their sum.
@@ -44,7 +53,9 @@ func Score(m Metrics, w Weights, s Scale) (Terms, float64) {
 		Height:        w.Height * m.HeightMM / s.SizeMM,
 		BedContact:    -w.BedContact * m.BedContactAreaMM2 / s.SurfaceAreaMM2,
 	}
-	return t, t.SupportDemand + t.Height + t.BedContact
+	sin := math.Sin(m.LongAxisElevationDeg * math.Pi / 180)
+	t.Strength = w.Strength * s.Elongation * sin * sin
+	return t, t.SupportDemand + t.Height + t.BedContact + t.Strength
 }
 
 // ScoreQuantum is the resolution at which scores are compared. Two scores

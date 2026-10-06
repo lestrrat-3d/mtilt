@@ -39,16 +39,22 @@ func TestAngle(t *testing.T) {
 
 func TestClassify(t *testing.T) {
 	const threshold, bedTol = 45.0, 1e-6
-	require.Equal(t, overhang.Demand, overhang.Classify(downFacing(0, 5), threshold, bedTol), "ceiling")
-	require.Equal(t, overhang.Demand, overhang.Classify(downFacing(44.9, 5), threshold, bedTol))
-	require.Equal(t, overhang.None, overhang.Classify(downFacing(45.1, 5), threshold, bedTol))
-	require.Equal(t, overhang.BedContact, overhang.Classify(downFacing(0, 0), threshold, bedTol), "face on the plate")
-	require.Equal(t, overhang.Demand, overhang.Classify(downFacing(0, 2*bedTol), threshold, bedTol), "just above the plate")
+	require.Equal(t, overhang.Demand, overhang.Classify(downFacing(0, 5), threshold, bedTol, 0), "ceiling")
+	require.Equal(t, overhang.Demand, overhang.Classify(downFacing(44.9, 5), threshold, bedTol, 0))
+	require.Equal(t, overhang.None, overhang.Classify(downFacing(45.1, 5), threshold, bedTol, 0))
+	require.Equal(t, overhang.BedContact, overhang.Classify(downFacing(0, 0), threshold, bedTol, 0), "face on the plate")
+	require.Equal(t, overhang.Demand, overhang.Classify(downFacing(0, 2*bedTol), threshold, bedTol, 0), "just above the plate")
+
+	// A ceiling 1 mm up is anchored under a 1.5 mm anchor height, not
+	// under a 0.5 mm one.
+	require.Equal(t, overhang.Anchored, overhang.Classify(downFacing(0, 1), threshold, bedTol, 1.5))
+	require.Equal(t, overhang.Demand, overhang.Classify(downFacing(0, 1), threshold, bedTol, 0.5))
+	require.Equal(t, overhang.None, overhang.Classify(downFacing(60, 1), threshold, bedTol, 1.5), "steep faces are never anchored")
 
 	up := downFacing(0, 5)
 	up[1], up[2] = up[2], up[1]
-	require.Equal(t, overhang.None, overhang.Classify(up, threshold, bedTol), "upward face")
+	require.Equal(t, overhang.None, overhang.Classify(up, threshold, bedTol, 0), "upward face")
 
 	sliver := [3]r3.Vec{r3.NewVec(0, 0, 1), r3.NewVec(1, 0, 1), r3.NewVec(2, 0, 1)}
-	require.Equal(t, overhang.None, overhang.Classify(sliver, threshold, bedTol), "zero area")
+	require.Equal(t, overhang.None, overhang.Classify(sliver, threshold, bedTol, 0), "zero area")
 }

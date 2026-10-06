@@ -8,8 +8,8 @@ import (
 	"math"
 	"slices"
 
+	"github.com/lestrrat-3d/mtilt/internal/mesh"
 	"github.com/lestrrat-3d/mtilt/internal/overhang"
-	"github.com/lestrrat-3d/mtilt/mesh"
 	"github.com/lestrrat-3d/r3"
 )
 
@@ -75,7 +75,8 @@ const slackFactor = 4
 // Demand is every triangle overhang.Classify marks as Demand. Build samples
 // it on a square grid of pitch SpacingMM/4 anchored at the origin (every
 // grid point inside a demand triangle's XY projection, at the triangle's
-// height there) plus every demand triangle's vertices.
+// height there) plus every demand triangle's vertices, leaving out samples
+// at or below PlateAnchorMM.
 //
 // Coverage rule: a sample (x, y, z) is covered by a pillar at (px, py) whose
 // held surface is at height sz when hypot(x-px, y-py) <= SpacingMM and
@@ -120,7 +121,7 @@ func Build(ctx context.Context, placed *mesh.Mesh, p Params, lim Limits, tol mes
 	}
 	plan := &Plan{}
 	for i := range placed.Triangles {
-		b.kinds[i] = overhang.Classify(placed.Triangle(i), p.ThresholdDeg, tol.Plate)
+		b.kinds[i] = overhang.Classify(placed.Triangle(i), p.ThresholdDeg, tol.Plate, p.PlateAnchorMM)
 		if b.kinds[i] == overhang.Demand {
 			plan.DemandTriangles++
 		}
@@ -211,6 +212,11 @@ func (b *builder) samples(ctx context.Context) ([]r3.Vec, error) {
 	seen := make(map[r3.Vec]struct{})
 	var out []r3.Vec
 	push := func(v r3.Vec) error {
+		// A demand triangle can reach below the plate-anchor height; the
+		// part of it down there is anchored, not demand.
+		if v.Z <= b.p.PlateAnchorMM {
+			return nil
+		}
 		if _, ok := seen[v]; ok {
 			return nil
 		}

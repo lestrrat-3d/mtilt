@@ -13,5 +13,6 @@
   "pillar_width_mm": 2.0,
   "tip_height_mm": 2.0,
   "base_width_mm": 3.0,
-  "base_thickness_mm": 0.6
+  "base_thickness_mm": 0.6,
+  "plate_anchor_height_mm": 1.2
 }

@@ -2,10 +2,10 @@
 
 ## Scope
 
-mtilt reads STL files and JSON profiles and writes STL and JSON files. The primary security concern is **crafted
-input**: a hostile STL file, profile or option set that reaches the public API or the `mtilt` command and causes
-a denial of service (unbounded CPU or memory, a hang), a reachable panic, or a file written outside the output
-directory the caller named. Bugs of that kind are in scope.
+mtilt reads a decad body, a JSON profile and options, and adds bodies to the body's decad document. It reads and
+writes no files of its own. The primary security concern is **crafted input**: a profile, option set or body that
+reaches the public API and causes a denial of service (unbounded CPU or memory, a hang) or a reachable panic. Bugs
+of that kind are in scope.
 
 Issues that only affect test code, examples, or internal tooling are welcome as ordinary bug reports rather than
 security reports.
