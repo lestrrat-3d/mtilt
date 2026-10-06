@@ -223,7 +223,7 @@ type ModelReport struct {
 // SupportReport describes one support body.
 type SupportReport struct {
 	ID string `json:"id"`
-	// Kind is "pillar" or "branch". A branch\'s foot stands at FootMM on
+	// Kind is "pillar" or "branch". A branch's foot stands at FootMM on
 	// the plate; its vertical shaft ends at KneeZMM, where it leans toward
 	// CenterMM.
 	Kind       string        `json:"kind"`
