@@ -1,0 +1,11 @@
+# Byte-exact reproduction across platforms.
+#
+# Geometry exporters (STL/OBJ/3MF/JSON) and Go example `// Output:` blocks are
+# compared byte-for-byte against committed golden files by tests that run on the
+# Windows CI runner too. Git's autocrlf would rewrite LF-committed blobs to CRLF
+# on checkout there, so a golden file would gain stray \r bytes and stop matching
+# the library's LF output — a spurious CI failure on an otherwise-correct tree.
+#
+# `-text` disables ALL end-of-line conversion, so every checkout reproduces the
+# committed blob EXACTLY on every platform.
+* -text
