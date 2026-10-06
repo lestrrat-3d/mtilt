@@ -238,6 +238,8 @@ func (p Profile) supportParams() support.Params {
 		MaxBridgeMM:      p.MaxBridgeMM,
 		MaxBridgeTiltDeg: p.MaxBridgeTiltDeg,
 		MaxLeanDeg:       p.MaxBranchLeanDeg,
+		ExtrusionWidthMM: p.ExtrusionWidthMM,
+		MinFeatureMM:     p.MinFeatureMM,
 	}
 }
 

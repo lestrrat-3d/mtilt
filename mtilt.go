@@ -388,11 +388,7 @@ func (s *session) firstLayerOK(cr *CandidateReport) bool {
 // total contact area, priced like the estimate.
 func (s *session) plannedCost(plan *support.Plan) orient.Cost {
 	p := s.opts.Profile.supportParams()
-	var vol float64
-	for _, pl := range plan.Pillars {
-		vol += p.Volume(pl)
-	}
-	return orient.NewCost(vol, float64(len(plan.Pillars))*p.ContactArea(), s.opts.CostWeights, s.scale)
+	return orient.NewCost(p.PlanVolume(plan), float64(len(plan.Pillars))*p.ContactArea(), s.opts.CostWeights, s.scale)
 }
 
 // errAttemptFailed is returned by attempt when a candidate's supports fail;
@@ -452,15 +448,31 @@ func (s *session) build(ctx context.Context, id int, plan *support.Plan) (*Resul
 	res := &Result{Model: model, Transform: full, Report: *rep}
 	params := s.opts.Profile.supportParams()
 	w := sketch.NewWorld()
-	upright := make([]bool, len(plan.Pillars))
-	for i, pl := range plan.Pillars {
-		pb, err := params.Body(ctx, w, s.body.Document(), pl)
+	// One body per straight pillar or single branch, then one per tree.
+	var bodies []supportBody
+	for _, pl := range plan.Pillars {
+		if pl.Tree == 0 {
+			bodies = append(bodies, supportBody{tips: []support.Pillar{pl}})
+		}
+	}
+	for i := range plan.Trees {
+		bodies = append(bodies, supportBody{tree: &plan.Trees[i], tips: plan.Members(i + 1)})
+	}
+	upright := make([]bool, len(bodies))
+	for i, sb := range bodies {
+		var pb *decad.Body
+		var err error
+		if sb.tree != nil {
+			pb, err = params.TreeBody(ctx, w, s.body.Document(), *sb.tree, sb.tips)
+		} else {
+			pb, err = params.Body(ctx, w, s.body.Document(), sb.tips[0])
+		}
 		if err != nil {
 			s.remove(res)
 			return nil, fmt.Errorf("mtilt: building support body: %w", err)
 		}
 		res.Supports = append(res.Supports, pb)
-		upright[i] = !pl.IsBranch()
+		upright[i] = sb.tree == nil && !sb.tips[0].IsBranch()
 	}
 
 	checks, err := s.verifyAssembly(ctx, res, upright)
@@ -488,7 +500,8 @@ func (s *session) build(ctx context.Context, id int, plan *support.Plan) (*Resul
 		return nil, err
 	}
 	rep.Model = &ModelReport{BoundsMM: boxArray(mesh.Box{Min: mb.Min, Max: mb.Max}), VolumeMM3: rep.Input.VolumeMM3}
-	for i, pl := range plan.Pillars {
+	for i, sb := range bodies {
+		pl := sb.tips[0]
 		sr := SupportReport{
 			ID:         fmt.Sprintf("support-%04d", i+1),
 			CenterMM:   [2]float64{pl.X, pl.Y},
@@ -497,7 +510,16 @@ func (s *session) build(ctx context.Context, id int, plan *support.Plan) (*Resul
 			TopZMM:     pl.TopZ,
 			Origin:     string(pl.Origin),
 		}
-		if pl.IsBranch() {
+		switch {
+		case sb.tree != nil:
+			sr.Kind = "tree"
+			foot := [2]float64{sb.tree.FootX, sb.tree.FootY}
+			top := sb.tree.TopZ
+			sr.FootMM, sr.KneeZMM = &foot, &top
+			for _, m := range sb.tips {
+				sr.TipsMM = append(sr.TipsMM, [3]float64{m.X, m.Y, m.TopZ})
+			}
+		case pl.IsBranch():
 			sr.Kind = "branch"
 			foot := [2]float64{pl.FootX, pl.FootY}
 			knee := pl.KneeZ
@@ -527,6 +549,13 @@ func (s *session) build(ctx context.Context, id int, plan *support.Plan) (*Resul
 		}
 	}
 	return res, nil
+}
+
+// supportBody is one support body to build: a straight pillar or single
+// branch (tree nil, one tip), or a tree and its members.
+type supportBody struct {
+	tree *support.Tree
+	tips []support.Pillar
 }
 
 // remove takes every body Prepare added for res out of the document again
@@ -570,6 +599,14 @@ func (s *session) verifyAssembly(ctx context.Context, res *Result, upright []boo
 		validity.Status = mesh.StatusFailed
 		validity.Detail = fmt.Sprintf("decad reported %d of %d assembly bodies", seen, len(ours))
 	}
+	lumps := mesh.Check{Name: "decad_support_lumps", Status: mesh.StatusPassed}
+	for i, b := range res.Supports {
+		if n := len(b.Lumps()); n != 1 {
+			lumps.Status = mesh.StatusFailed
+			lumps.Detail = fmt.Sprintf("support-%04d is %d lumps", i+1, n)
+			break
+		}
+	}
 	interference := mesh.Check{Name: "decad_interference", Status: mesh.StatusPassed}
 	for _, in := range vr.Interferences {
 		a, okA := ours[in.A]
@@ -580,7 +617,7 @@ func (s *session) verifyAssembly(ctx context.Context, res *Result, upright []boo
 			break
 		}
 	}
-	checks := []mesh.Check{validity, interference}
+	checks := []mesh.Check{validity, lumps, interference}
 
 	model, mbound, err := mesh.FromBody(ctx, res.Model, s.opts.ChordToleranceMM)
 	if err != nil {

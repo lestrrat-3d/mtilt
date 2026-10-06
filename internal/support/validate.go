@@ -26,8 +26,11 @@ const (
 // is the extra distance the length checks tolerate: 0 for in-memory
 // meshes, the serialization tolerance for re-read ones.
 //
-//   - support_topology: every support passes mesh.Validate with no failed
-//     check (one closed, manifold, outward-wound component).
+//   - support_topology: every support passes mesh.Validate's closed,
+//     manifold, winding and outward checks. Two checks are left to decad:
+//     near-zero-area slivers (decad proves the boundary closed) and the
+//     component count (a hollow trunk's sealed bore is a second shell of
+//     one solid; decad's lump count decides).
 //   - support_on_plate: every support's lowest Z is 0 within allowance, and
 //     so its single connected body reaches the plate.
 //   - support_model_contact: no support triangle touches a model triangle.
@@ -51,8 +54,19 @@ func ValidateAssembly(ctx context.Context, model *mesh.Mesh, supports []*mesh.Me
 		if err != nil {
 			return nil, err
 		}
-		if failed := rep.Failed(); len(failed) > 0 {
-			topology = append(topology, fmt.Sprintf("%s: %s (%s)", name, failed[0].Name, failed[0].Detail))
+		// A boolean result's tessellation can hold slivers a few 1e-15 mm
+		// wide between distinct exact points; decad proves the mesh closed
+		// anyway (BoundaryVerified), so near-zero-area triangles are not a
+		// failure for a support.
+		// A hollow trunk's mesh has a second, inner shell around its
+		// sealed bore, so it is two edge-connected components while being
+		// one solid; the caller checks the lump count with decad.
+		for _, f := range rep.Failed() {
+			if f.Name == mesh.CheckNondegenerate || f.Name == mesh.CheckSingleComponent {
+				continue
+			}
+			topology = append(topology, fmt.Sprintf("%s: %s (%s)", name, f.Name, f.Detail))
+			break
 		}
 		b := s.Bounds()
 		boxes[i] = b
@@ -125,6 +139,14 @@ func RecheckPlan(placed *mesh.Mesh, plan *Plan, p Params, tol mesh.Tolerance) []
 	}
 	b.lim.MaxSupports = len(plan.Pillars)
 	var zones []string
+	for i, t := range plan.Trees {
+		for _, z := range p.trunkZones(t, p.SideClearanceMM) {
+			if ti, hit := b.ix.anyTouching(z, b.eps); hit {
+				zones = append(zones, fmt.Sprintf("tree %d trunk zone touches model triangle %d", i+1, ti))
+				break
+			}
+		}
+	}
 	for i, pl := range plan.Pillars {
 		for _, z := range p.clearanceZones(pl) {
 			if ti, hit := b.ix.anyTouching(z, b.eps); hit {

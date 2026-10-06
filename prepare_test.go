@@ -42,11 +42,11 @@ func requireFailure(t *testing.T, err error, target error) *mtilt.FailureError {
 	return fe
 }
 
-func requireCheck(t *testing.T, checks []mesh.Check, name string, want mesh.Status) {
+func requirePassed(t *testing.T, checks []mesh.Check, name string) {
 	t.Helper()
 	for _, c := range checks {
 		if c.Name == name {
-			require.Equal(t, want, c.Status, "%s: %s", c.Name, c.Detail)
+			require.Equal(t, mesh.StatusPassed, c.Status, "%s: %s", c.Name, c.Detail)
 			return
 		}
 	}
@@ -135,8 +135,8 @@ func TestPrepare(t *testing.T) {
 		require.True(t, res.Transform.Basis() == r3.Identity().Basis(), "rotation kept")
 		requireMovedCopy(t, body, res.Model, res.Transform)
 		requireNoFailedCheck(t, res.Report)
-		requireCheck(t, res.Report.Validation, "decad_interference", mesh.StatusPassed)
-		requireCheck(t, res.Report.Validation, "decad_body_validity", mesh.StatusPassed)
+		requirePassed(t, res.Report.Validation, "decad_interference")
+		requirePassed(t, res.Report.Validation, "decad_body_validity")
 
 		mb, err := res.Model.Bounds()
 		require.NoError(t, err)
@@ -173,21 +173,34 @@ func TestPrepare(t *testing.T) {
 		res, err := prepare(t, body, mtilt.Options{KeepOrientation: true})
 		require.NoError(t, err)
 		requireNoFailedCheck(t, res.Report)
-		requireCheck(t, res.Report.Validation, "decad_interference", mesh.StatusPassed)
+		requirePassed(t, res.Report.Validation, "decad_interference")
 		require.NotEmpty(t, res.Supports)
 		mb, err := res.Model.Bounds()
 		require.NoError(t, err)
 		for i, sr := range res.Report.Supports {
 			// The base covers the whole footprint under the arm, so every
-			// support is a branch whose foot stands outside the model's
-			// bounding box in X or Y.
-			require.Equal(t, "branch", sr.Kind)
+			// support is a branch or a tree whose foot stands outside the
+			// model's bounding box in X or Y.
+			require.Contains(t, []string{"branch", "tree"}, sr.Kind)
 			require.NotNil(t, sr.FootMM)
 			f := *sr.FootMM
 			outside := f[0] > mb.Max.X || f[0] < mb.Min.X || f[1] > mb.Max.Y || f[1] < mb.Min.Y
 			require.True(t, outside, "branch %d foot %v is under the model", i+1, f)
 			require.True(t, res.Supports[i].IsSolid())
+			require.Len(t, res.Supports[i].Lumps(), 1)
 		}
+		requirePassed(t, res.Report.Validation, "decad_support_lumps")
+		trees, tips := 0, 0
+		for _, sr := range res.Report.Supports {
+			if sr.Kind == "tree" {
+				trees++
+				tips += len(sr.TipsMM)
+				continue
+			}
+			tips++
+		}
+		require.Positive(t, trees)
+		require.Greater(t, tips, len(res.Supports), "trees carry more tips than there are bodies")
 	})
 
 	t.Run("occluded overhang fails and adds no bodies without branches", func(t *testing.T) {

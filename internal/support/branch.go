@@ -203,6 +203,9 @@ const (
 // supportSolids returns the solids that enclose an accepted support, for
 // support-to-support checks.
 func (p Params) supportSolids(pl Pillar) []convex {
+	if pl.Tree > 0 {
+		return p.memberZones(pl, 0)
+	}
 	if pl.IsBranch() {
 		return p.branchZones(pl, 0)
 	}
@@ -233,25 +236,24 @@ func (b *builder) branchPass(ctx context.Context, uncovered []Sample) ([]Sample,
 		if b.covered(u.Point) {
 			continue
 		}
-		pl, ok := b.findBranch(ctx, u.Point)
-		if !ok {
-			if u.Reason == "" {
-				u.Reason = ReasonNoBranch
-			}
-			still = append(still, Sample{Point: u.Point, Reason: u.Reason + "; " + ReasonNoBranch})
-			continue
-		}
-		if err := b.add(pl); err != nil {
+		ok, err := b.placeBranch(ctx, u.Point)
+		if err != nil {
 			return nil, err
+		}
+		if !ok {
+			still = append(still, Sample{Point: u.Point, Reason: u.Reason + "; " + ReasonNoBranch})
 		}
 	}
 	return still, nil
 }
 
-func (b *builder) findBranch(ctx context.Context, s r3.Vec) (Pillar, bool) {
+// placeBranch finds a tip for sample s and adds a single branch, standing on
+// its own foot, for it. It reports whether it placed one. Branches join
+// trunks afterwards, in mergePass.
+func (b *builder) placeBranch(ctx context.Context, s r3.Vec) (bool, error) {
 	for _, tip := range b.tipPositions(s) {
-		if ctx.Err() != nil {
-			return Pillar{}, false
+		if err := ctx.Err(); err != nil {
+			return false, err
 		}
 		surf, tri, ok := b.ix.lowestHit(tip[0], tip[1], s.Z-b.dzMax, b.eps)
 		if !ok || b.kinds[tri] != overhang.Demand || math.Abs(surf-s.Z) > b.dzMax+b.eps {
@@ -263,10 +265,10 @@ func (b *builder) findBranch(ctx context.Context, s r3.Vec) (Pillar, bool) {
 			continue
 		}
 		if found, ok := b.findFoot(pl); ok {
-			return found, true
+			return true, b.add(found)
 		}
 	}
-	return Pillar{}, false
+	return false, nil
 }
 
 // tipPositions returns the sample's own position, then the points of a
@@ -342,12 +344,10 @@ func (b *builder) branchClear(pl Pillar) bool {
 		}
 	}
 	mine := b.p.branchZones(pl, b.p.SideClearanceMM)
-	for _, o := range b.pillars {
-		for _, theirs := range b.p.supportSolids(o) {
-			for _, z := range mine[:3] {
-				if touchesConvex(z, theirs, b.eps) {
-					return false
-				}
+	for _, theirs := range b.solidsExcept(nil, 0) {
+		for _, z := range mine[:3] {
+			if touchesConvex(z, theirs, b.eps) {
+				return false
 			}
 		}
 	}

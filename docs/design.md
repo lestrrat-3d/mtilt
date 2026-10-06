@@ -314,7 +314,31 @@ Clearance zones around a lean are two 8-gons, enclosing the 16-gon, at its ends,
 both ends so they also enclose the mitre wedges. Support-to-support checks use separating axes between these convex
 zones. A branch's cost (section 5.2) uses its frustum volume along the path.
 
-Branches do not merge into trunks yet ([roadmap.md](roadmap.md)): every branch has its own foot.
+### 7.7.1 Trees
+
+After every branch has been placed on its own foot, `mergePass` (`internal/support/tree.go`) tries, branch by
+branch in plan order, to re-route it onto a **trunk**: an existing tree, or another single branch, which then
+becomes a two-member tree. Candidates are taken by the distance from their foot to the tip, nearest first. A
+re-routed branch keeps its tip; it leaves the trunk's axis at a knee placed where a `max_branch_lean_deg` lean
+from the foot reaches its tip start. It is accepted when:
+
+- its knee is at least 1 mm plus a branch diameter from every other member's knee, so members do not overlap
+  inside the trunk (decad's unions can fail when they do);
+- the grown trunk (radius `pillar_width_mm / 2 * sqrt(members)`, base wider by the pillar's base margin, up to the
+  highest knee) and every member's lean and tip, with `side_clearance_mm`, touch no model triangle and no other
+  support;
+- members' leans do not touch each other outside the trunk;
+- the tree stays at 14 members or fewer (decad chains about 15 unions onto one body).
+
+Otherwise the branch goes back on its own foot. Every branch fitted as a single, and taking one out only frees
+room, so merging never loses coverage.
+
+A tree is built as one decad body: the trunk swept from the plate to its top, then each member swept from its
+root (a 1 mm vertical stub on the trunk's axis below its knee) and unioned onto it. When the trunk is at least four
+extrusion widths across, a bore is cut out of it (decad's sealed-bore recipe): a thinner sweep with walls two
+extrusion widths thick, from 1 mm above the base to a branch radius plus 1 mm below the lowest root, at least 2 mm
+long. The bore makes the trunk print hollow; its inner shell makes the body's mesh two components, so the "one
+solid" check for supports is decad's lump count (`decad_support_lumps`).
 
 ### 7.8 Verification
 
@@ -326,8 +350,9 @@ After the bodies are built, for the selected candidate only:
 | Check | Requirement |
 |---|---|
 | `decad_body_validity` | decad's `Verify` reports every assembly body (model and pillars) as a valid solid |
+| `decad_support_lumps` | every support body is one decad lump (a hollow trunk is one lump with a void) |
 | `decad_interference` | `Verify` proves no two assembly bodies overlap |
-| `tessellated_support_topology` | each pillar's tessellation passes `mesh.Validate` |
+| `tessellated_support_topology` | each support's tessellation passes `mesh.Validate`'s closed, manifold and winding checks (slivers and the component count are left to decad) |
 | `tessellated_support_on_plate` | each pillar's lowest Z is 0 |
 | `tessellated_support_model_contact` | no pillar triangle touches a model triangle |
 | `tessellated_support_top_gap` | the model's lowest point above each top face, over that face, is at least the gap above it |
