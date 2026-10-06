@@ -12,6 +12,31 @@ them into a slicer.
 > passed mtilt's and decad's geometric checks and nothing else. No support from mtilt has been printed, sliced or
 > tested for breakaway behavior. The example profile is illustrative and uncalibrated.
 
+## What it looks like
+
+Each image shows a test part as given (left) and as mtilt prepared it (right): the model in blue, the supports in
+gold, on the build plate. `cd _gallery && go run .` regenerates them.
+
+The nail stands 104 mm tall on a small flange. Standing up, every layer line crosses its length, so mtilt lays it
+down; within the 15 degree tilt limit, a 5 degree tilt needs the fewest supports (49).
+
+![A nail standing on its flange, then lying almost flat on 49 gold pillars](docs/images/nail.png)
+
+The oblique cuboid is turned onto its largest face and needs no supports.
+
+![A tilted box, then the same box flat on the plate](docs/images/oblique-cuboid.png)
+
+The square stick is laid down.
+
+![A stick standing on its end, then lying flat](docs/images/stick.png)
+
+The bracket and the bridge are kept upright (`KeepOrientation`) to show the pillars under an overhang and under a
+span: 41 and 37 pillars.
+
+![A bracket with its arm held up by gold pillars](docs/images/bracket-kept.png)
+
+![A bridge with its span held up by gold pillars](docs/images/bridge-kept.png)
+
 ## What it does now
 
 - Takes one connected solid decad body (millimeters, +Z up, plate at Z = 0). It refuses a body that is not a
@@ -76,6 +101,7 @@ mtilt has not been tested with any slicer. To keep the parts where mtilt put the
 go test ./...                          # unit, pipeline and example tests
 go vet ./...
 golangci-lint run                      # v2.12.2, config in .golangci.yml
+cd _gallery && go run .                # regenerate docs/images
 ```
 
 ## License

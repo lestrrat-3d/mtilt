@@ -341,6 +341,7 @@ itself took milliseconds.
 | `internal/fixture/` | test shapes as triangle soups and as decad bodies |
 | `profiles/example-fdm.json` | illustrative, uncalibrated profile |
 | `examples/` | executable examples |
+| `_gallery/` | the README images: a separate module (solidlens, golang.org/x/image) that prepares fixtures with mtilt and renders them |
 
 ## 11. Dependencies
 
@@ -352,4 +353,5 @@ itself took milliseconds.
 | `github.com/lestrrat-3d/units` | lengths passed to and read from decad | decad's quantities are `units.Value` |
 | `github.com/stretchr/testify` | tests only | assertions |
 
-No dependency needs cgo, a network, Python, or a GPU.
+`_gallery/` is its own module, so its renderer (`github.com/lestrrat-3d/solidlens`) and font
+(`golang.org/x/image`) never enter the library's `go.mod`. No dependency needs cgo, a network, Python, or a GPU.

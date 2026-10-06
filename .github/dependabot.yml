@@ -18,3 +18,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+
+  # The README image program is its own module; the root entry does not see
+  # its go.mod.
+  - package-ecosystem: gomod
+    directory: /_gallery
+    schedule:
+      interval: weekly
