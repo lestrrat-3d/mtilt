@@ -1,0 +1,8 @@
+github.com/lestrrat-3d/r3 v0.0.0-20261005214828-6011e4189399 h1:qWnfw9VztJPd6Zga5jnOhWXbFDguye8b7RGed7Xvvps=
+github.com/lestrrat-3d/r3 v0.0.0-20261005214828-6011e4189399/go.mod h1:4ZWWwLiR9tf6tOORKYM95+OXLMbdAmHywWdUYsDJfYc=
+github.com/lestrrat-3d/units v0.0.0-20260904060501-aa72af3789a1 h1:rOUGuTawXiGSnJjLKnEe/iZjSy4p9LBxj5NuJEBQA+4=
+github.com/lestrrat-3d/units v0.0.0-20260904060501-aa72af3789a1/go.mod h1:43cmeVRCRWndV+h2v92CZxlEvGWNfMYv5/KHFFUThKI=
+github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
+github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
+go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
+go.yaml.in/yaml/v3 v3.0.5/go.mod h1:HVTZu1O7/Vkt2N+BFy8Zza+lnLsABggaTM2ZpNIGuKg=

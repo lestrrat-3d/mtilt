@@ -1,0 +1,17 @@
+{
+  "name": "example-fdm (illustrative, uncalibrated)",
+  "calibrated": false,
+  "nozzle_diameter_mm": 0.4,
+  "extrusion_width_mm": 0.45,
+  "layer_height_mm": 0.2,
+  "min_feature_mm": 0.8,
+  "overhang_threshold_deg": 45,
+  "support_spacing_mm": 4.0,
+  "top_contact_gap_mm": 0.2,
+  "side_clearance_mm": 0.5,
+  "contact_width_mm": 1.0,
+  "pillar_width_mm": 2.0,
+  "tip_height_mm": 2.0,
+  "base_width_mm": 3.0,
+  "base_thickness_mm": 0.6
+}
