@@ -53,6 +53,9 @@ type Plan struct {
 	// on a short bridge or on top of a wall (see builder.bridgeCheck).
 	Bridged int
 	Held    int
+	// Trees are the trunks tree members leave (see tree.go); a member's
+	// Pillar.Tree is its 1-based index here.
+	Trees []Tree
 	// Uncovered lists the samples no pillar covers, sorted by Y, X, Z.
 	// A plan with any uncovered sample must not be used.
 	Uncovered []Sample
@@ -160,11 +163,26 @@ func Build(ctx context.Context, placed *mesh.Mesh, p Params, lim Limits, tol mes
 	if uncovered, err = b.branchPass(ctx, uncovered); err != nil {
 		return nil, err
 	}
+	if err := b.mergePass(ctx); err != nil {
+		return nil, err
+	}
 	plan.Uncovered = uncovered
 
 	plan.Pillars = slices.Clone(b.pillars)
 	slices.SortFunc(plan.Pillars, func(a, c Pillar) int { return cmp.Or(cmp.Compare(a.Y, c.Y), cmp.Compare(a.X, c.X)) })
+	plan.Trees = slices.Clone(b.trees)
 	return plan, nil
+}
+
+// Members returns the pillars that leave tree id (1-based), in plan order.
+func (plan *Plan) Members(id int) []Pillar {
+	var out []Pillar
+	for _, pl := range plan.Pillars {
+		if pl.Tree == id {
+			out = append(out, pl)
+		}
+	}
+	return out
 }
 
 type builder struct {
@@ -177,6 +195,7 @@ type builder struct {
 	kinds []overhang.Kind
 
 	pillars []Pillar
+	trees   []Tree
 	// cells buckets pillar indices by SpacingMM grid cell for coverage
 	// and crowding lookups.
 	cells map[[2]int64][]int

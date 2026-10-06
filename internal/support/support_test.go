@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"math/rand/v2"
+	"slices"
 	"testing"
 
 	"github.com/lestrrat-3d/decad"
@@ -445,7 +446,11 @@ func TestBranches(t *testing.T) {
 		placed, tol := placedAsIs(t, fixture.Occluded())
 		plan, err := support.Build(t.Context(), placed, withBranches, limits, tol)
 		require.NoError(t, err)
-		pl := plan.Pillars[0]
+		// Take a branch that stayed single; members are built with
+		// their tree (TestTrees).
+		idx := slices.IndexFunc(plan.Pillars, func(pl support.Pillar) bool { return pl.Tree == 0 })
+		require.GreaterOrEqual(t, idx, 0)
+		pl := plan.Pillars[idx]
 		body, err := withBranches.Body(t.Context(), sketch.NewWorld(), decad.New(), pl)
 		require.NoError(t, err)
 		require.True(t, body.IsSolid())
@@ -469,4 +474,87 @@ func TestBranches(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, rep.Failed())
 	})
+}
+
+func TestTrees(t *testing.T) {
+	p := params
+	p.MaxLeanDeg = 40
+	p.ExtrusionWidthMM = 0.45
+	p.MinFeatureMM = 0.8
+	placed, tol := placedAsIs(t, fixture.Occluded())
+	plan, err := support.Build(t.Context(), placed, p, limits, tol)
+	require.NoError(t, err)
+	require.Empty(t, plan.Uncovered)
+	requireAllPassed(t, support.RecheckPlan(placed, plan, p, tol))
+
+	t.Run("branches merge into trees within the member limit", func(t *testing.T) {
+		require.NotEmpty(t, plan.Trees)
+		members := 0
+		for i, tr := range plan.Trees {
+			ms := plan.Members(i + 1)
+			require.Len(t, ms, tr.Members)
+			require.GreaterOrEqual(t, tr.Members, 2)
+			require.LessOrEqual(t, tr.Members, 14)
+			members += len(ms)
+			for j, m := range ms {
+				require.True(t, m.IsBranch())
+				require.Equal(t, tr.FootX, m.FootX)
+				require.Equal(t, tr.FootY, m.FootY)
+				require.LessOrEqual(t, m.KneeZ, tr.TopZ)
+				require.InDelta(t, m.KneeZ-1, m.RootZ, 1e-12)
+				// Knees are apart, so members do not overlap inside the
+				// trunk.
+				for _, o := range ms[j+1:] {
+					require.GreaterOrEqual(t, math.Abs(m.KneeZ-o.KneeZ), 1+p.PillarWidthMM-1e-9)
+				}
+			}
+		}
+		bodies := len(plan.Pillars) - members + len(plan.Trees)
+		require.Less(t, bodies, len(plan.Pillars), "merging leaves fewer bodies than tips")
+	})
+
+	t.Run("a tree is one solid lump, hollow when its trunk is wide", func(t *testing.T) {
+		best := 0
+		for i, tr := range plan.Trees {
+			if tr.Members > plan.Trees[best].Members {
+				best = i
+			}
+		}
+		tr := plan.Trees[best]
+		body, err := p.TreeBody(t.Context(), sketch.NewWorld(), decad.New(), tr, plan.Members(best+1))
+		require.NoError(t, err)
+		require.True(t, body.IsSolid())
+		require.Len(t, body.Lumps(), 1)
+		m, _, err := mesh.FromBody(t.Context(), body, tessellationTolMM)
+		require.NoError(t, err)
+		rep, err := mesh.Validate(t.Context(), m, mesh.ToleranceFor(m.Bounds()))
+		require.NoError(t, err)
+		requireCheckStatus(t, rep, mesh.CheckClosed, mesh.StatusPassed)
+		requireCheckStatus(t, rep, mesh.CheckConsistentWind, mesh.StatusPassed)
+		if 2*p.PillarWidthMM/2*math.Sqrt(float64(tr.Members)) >= 4*p.ExtrusionWidthMM {
+			// The sealed bore is a second shell.
+			require.Equal(t, 2, rep.Components)
+		}
+		vol, err := body.Volume()
+		require.NoError(t, err)
+		got, err := vol.Value.In(units.CubicMillimeter)
+		require.NoError(t, err)
+		require.Positive(t, got)
+	})
+
+	t.Run("the plan's volume counts each tree once", func(t *testing.T) {
+		total := p.PlanVolume(plan)
+		var singles float64
+		for _, pl := range plan.Pillars {
+			singles += p.Volume(pl)
+		}
+		require.Greater(t, total, singles)
+	})
+}
+
+func requireCheckStatus(t *testing.T, rep mesh.Report, name string, want mesh.Status) {
+	t.Helper()
+	got, ok := rep.Status(name)
+	require.True(t, ok)
+	require.Equal(t, want, got, name)
 }

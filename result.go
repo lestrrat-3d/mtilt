@@ -223,12 +223,15 @@ type ModelReport struct {
 // SupportReport describes one support body.
 type SupportReport struct {
 	ID string `json:"id"`
-	// Kind is "pillar" or "branch". A branch's foot stands at FootMM on
-	// the plate; its vertical shaft ends at KneeZMM, where it leans toward
-	// CenterMM.
+	// Kind is "pillar", "branch" or "tree". A branch's foot stands at
+	// FootMM on the plate; its vertical shaft ends at KneeZMM, where it
+	// leans toward CenterMM. A tree's trunk stands at FootMM and rises to
+	// KneeZMM; TipsMM lists every member's tip (X, Y, top Z), and
+	// CenterMM, SurfaceZMM and TopZMM describe the first.
 	Kind       string        `json:"kind"`
 	FootMM     *[2]float64   `json:"foot_mm,omitempty"`
 	KneeZMM    *float64      `json:"knee_z_mm,omitempty"`
+	TipsMM     [][3]float64  `json:"tips_mm,omitempty"`
 	CenterMM   [2]float64    `json:"center_mm"`
 	SurfaceZMM float64       `json:"held_surface_z_mm"`
 	TopZMM     float64       `json:"top_z_mm"`

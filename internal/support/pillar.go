@@ -54,6 +54,10 @@ type Params struct {
 	// MaxLeanDeg is the steepest a branch may lean from vertical; 0 turns
 	// branches off.
 	MaxLeanDeg float64
+	// ExtrusionWidthMM and MinFeatureMM size trunk bores (see
+	// Params.boreSpan).
+	ExtrusionWidthMM float64
+	MinFeatureMM     float64
 }
 
 // MinHeight is the shortest pillar these params can build: base plus tip.
@@ -103,6 +107,11 @@ type Pillar struct {
 	// FootX, FootY and KneeZ place a branch's foot and the top of its
 	// vertical shaft (see branch.go). They are zero for a straight pillar.
 	FootX, FootY, KneeZ float64
+	// Tree is the 1-based index into Plan.Trees of the trunk this branch
+	// leaves, or 0. RootZ is where a tree member's path starts on the
+	// trunk's axis (see tree.go).
+	Tree  int
+	RootZ float64
 }
 
 type level struct {
@@ -180,6 +189,9 @@ func (p Params) Body(ctx context.Context, w *sketch.World, doc *decad.Document, 
 //     holds). Lateral clearance is not applied within the tip's height, so
 //     the narrowing tip can approach a sloped surface it holds.
 func (p Params) clearanceZones(pl Pillar) []convex {
+	if pl.Tree > 0 {
+		return p.memberZones(pl, p.SideClearanceMM)
+	}
 	if pl.IsBranch() {
 		return p.branchZones(pl, p.SideClearanceMM)
 	}
@@ -197,6 +209,9 @@ func (p Params) clearanceZones(pl Pillar) []convex {
 // the sum, over consecutive levels at different heights, of the cone
 // frustum pi h (r1^2 + r1 r2 + r2^2) / 3.
 func (p Params) Volume(pl Pillar) float64 {
+	if pl.Tree > 0 {
+		return 0 // counted with its tree: see PlanVolume
+	}
 	if pl.IsBranch() {
 		return p.branchVolume(pl)
 	}
@@ -209,6 +224,19 @@ func (p Params) Volume(pl Pillar) float64 {
 		}
 		r1, r2 := lv[i-1].half, lv[i].half
 		v += math.Pi * h * (r1*r1 + r1*r2 + r2*r2) / 3
+	}
+	return v
+}
+
+// PlanVolume returns the volume in mm^3 of every support in a plan: each
+// straight pillar and single branch, and each tree with its members.
+func (p Params) PlanVolume(plan *Plan) float64 {
+	var v float64
+	for _, pl := range plan.Pillars {
+		v += p.Volume(pl)
+	}
+	for i, t := range plan.Trees {
+		v += p.treeVolume(t, plan.Members(i+1))
 	}
 	return v
 }

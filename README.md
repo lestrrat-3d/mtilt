@@ -37,10 +37,10 @@ span: 41 and 37 pillars.
 
 ![A bridge with its span held up by gold pillars](docs/images/bridge-kept.png)
 
-The ⊐-shaped part, kept upright, has an arm over its own base, so no straight pillar reaches the arm. Branches stand
-beside the base and lean in under it.
+The ⊐-shaped part, kept upright, has an arm over its own base, so no straight pillar reaches the arm. Trees stand
+beside the base and branch in under it: 39 tips on 24 bodies.
 
-![A C-shaped part whose top arm is held by gold branches that lean in from beside its base](docs/images/occluded-kept.png)
+![A C-shaped part whose top arm is held by gold trees that branch in from beside its base](docs/images/occluded-kept.png)
 
 ## What it does now
 
@@ -63,7 +63,8 @@ beside the base and lean in under it.
   bodies interfere and that each is a valid solid, and re-checks the pillars on their tessellations.
 - Reaches an overhang above another part of the model with a **branch**: a support whose foot stands beside that
   part on the plate and which leans in, at most `max_branch_lean_deg` (40 degrees in the example profile), to the
-  overhang. Each branch is one decad body, a tapered 16-sided sweep. Branches do not merge into trunks yet.
+  overhang. Nearby branches merge into a shared trunk, so one body (a tree) holds several tips; each tree is one
+  decad body, and trunks wide enough get a sealed bore so they print hollow.
 - Fails with a reason, and adds no bodies, when no candidate can be supported. If decad's final check fails after
   the bodies were built, mtilt removes them from the document again.
 
