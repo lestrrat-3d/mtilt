@@ -16,34 +16,6 @@ import (
 // ErrInvalidOptions is returned when options or a profile fail validation.
 var ErrInvalidOptions = errors.New("mtilt: invalid options")
 
-// Unit is the length unit of an input mesh's coordinates. STL files carry
-// no unit, so the caller always names one.
-type Unit string
-
-// Supported input units.
-const (
-	UnitMillimeter Unit = "mm"
-	UnitCentimeter Unit = "cm"
-	UnitMeter      Unit = "m"
-	UnitInch       Unit = "in"
-)
-
-// ToMillimeters returns the factor that converts a coordinate in u to
-// millimeters, and false for an unknown unit.
-func (u Unit) ToMillimeters() (float64, bool) {
-	switch u {
-	case UnitMillimeter:
-		return 1, true
-	case UnitCentimeter:
-		return 10, true
-	case UnitMeter:
-		return 1000, true
-	case UnitInch:
-		return 25.4, true
-	}
-	return 0, false
-}
-
 // BuildVolume is the printable box. X and Y extents are centered on the
 // origin; Z runs from the plate (0) up. Margin is kept clear on every side
 // except the plate.
@@ -78,6 +50,11 @@ type Profile struct {
 	TipHeightMM      float64 `json:"tip_height_mm"`
 	BaseWidthMM      float64 `json:"base_width_mm"`
 	BaseThicknessMM  float64 `json:"base_thickness_mm"`
+
+	// PlateAnchorMM is the height above the plate at or below which a
+	// downward surface counts as printed from the plate's first layers and
+	// needs no support. 0 supports everything above the plate.
+	PlateAnchorMM float64 `json:"plate_anchor_height_mm"`
 
 	// BuildVolume is optional. Without it, fit is reported as unchecked.
 	BuildVolume *BuildVolume `json:"build_volume,omitempty"`
@@ -130,14 +107,14 @@ var profileKeys = []string{
 	"name", "calibrated", "nozzle_diameter_mm", "extrusion_width_mm", "layer_height_mm",
 	"min_feature_mm", "overhang_threshold_deg", "support_spacing_mm", "top_contact_gap_mm",
 	"side_clearance_mm", "contact_width_mm", "pillar_width_mm", "tip_height_mm",
-	"base_width_mm", "base_thickness_mm",
+	"base_width_mm", "base_thickness_mm", "plate_anchor_height_mm",
 }
 
 // Validate checks the profile's values and their combinations. It returns
 // ErrInvalidOptions naming the first rule that fails:
 //
-//   - every length is finite and positive, except side_clearance_mm, which
-//     may be 0;
+//   - every length is finite and positive, except side_clearance_mm and
+//     plate_anchor_height_mm, which may be 0;
 //   - overhang_threshold_deg is in (0, 90);
 //   - layer_height_mm < nozzle_diameter_mm <= extrusion_width_mm <=
 //     min_feature_mm <= contact_width_mm <= pillar_width_mm <= base_width_mm;
@@ -167,6 +144,9 @@ func (p Profile) Validate() error {
 	}
 	if !(p.SideClearanceMM >= 0) || math.IsInf(p.SideClearanceMM, 0) {
 		return fail("side_clearance_mm must be finite and not negative, got %v", p.SideClearanceMM)
+	}
+	if !(p.PlateAnchorMM >= 0) || math.IsInf(p.PlateAnchorMM, 0) {
+		return fail("plate_anchor_height_mm must be finite and not negative, got %v", p.PlateAnchorMM)
 	}
 	if !(p.OverhangThreshold > 0 && p.OverhangThreshold < 90) {
 		return fail("overhang_threshold_deg must be between 0 and 90, got %v", p.OverhangThreshold)
@@ -220,6 +200,7 @@ func (p Profile) supportParams() support.Params {
 		BaseThicknessMM: p.BaseThicknessMM,
 		TopGapMM:        p.TopContactGapMM,
 		SideClearanceMM: p.SideClearanceMM,
+		PlateAnchorMM:   p.PlateAnchorMM,
 	}
 }
 
@@ -227,17 +208,18 @@ func (p Profile) supportParams() support.Params {
 type Weights = orient.Weights
 
 // DefaultWeights returns the weights Options uses when none are set:
-// support demand 1, height 0.1, bed contact 0.5.
+// support demand 1, height 0.1, bed contact 0.5, strength 0.5.
 func DefaultWeights() Weights {
-	return Weights{SupportDemand: 1, Height: 0.1, BedContact: 0.5}
+	return Weights{SupportDemand: 1, Height: 0.1, BedContact: 0.5, Strength: 0.5}
 }
 
 // Limits bound the work Prepare and Analyze do. A zero field means the
 // default listed beside it.
 type Limits struct {
-	// MaxTriangles caps the input mesh size. Default 2,000,000.
+	// MaxTriangles caps the tessellation of the input body. Default
+	// 2,000,000.
 	MaxTriangles int `json:"max_triangles"`
-	// MaxCandidates caps the orientations evaluated. Default 64.
+	// MaxCandidates caps the orientations evaluated. Default 128.
 	MaxCandidates int `json:"max_candidates"`
 	// MaxPlanarFaces caps the planar-face candidates. Default 12.
 	MaxPlanarFaces int `json:"max_planar_faces"`
@@ -258,7 +240,7 @@ func (l Limits) withDefaults() Limits {
 		}
 	}
 	def(&l.MaxTriangles, 2_000_000)
-	def(&l.MaxCandidates, 64)
+	def(&l.MaxCandidates, 128)
 	def(&l.MaxPlanarFaces, 12)
 	def(&l.MaxSupportAttempts, 8)
 	def(&l.MaxSupports, 5_000)
@@ -266,12 +248,20 @@ func (l Limits) withDefaults() Limits {
 	return l
 }
 
+// DefaultChordToleranceMM is the tessellation chord tolerance Options uses
+// when ChordToleranceMM is 0.
+const DefaultChordToleranceMM = 0.01
+
 // Options configure Prepare and Analyze.
 type Options struct {
 	// Profile is required.
 	Profile Profile
-	// Weights default to DefaultWeights when all three are zero.
+	// Weights default to DefaultWeights when all four are zero.
 	Weights Weights
+	// ChordToleranceMM is the chord tolerance the body is tessellated with
+	// for planning. Default DefaultChordToleranceMM. The bound decad proves
+	// for the tessellation is added to every clearance mtilt checks on it.
+	ChordToleranceMM float64
 	// KeepOrientation evaluates only the input orientation. The model is
 	// still translated onto the plate, and the translation is reported.
 	KeepOrientation bool
@@ -285,10 +275,16 @@ func (o Options) normalized() (Options, error) {
 	if o.Weights == (Weights{}) {
 		o.Weights = DefaultWeights()
 	}
-	for _, w := range []float64{o.Weights.SupportDemand, o.Weights.Height, o.Weights.BedContact} {
+	for _, w := range []float64{o.Weights.SupportDemand, o.Weights.Height, o.Weights.BedContact, o.Weights.Strength} {
 		if !(w >= 0) || math.IsInf(w, 0) {
 			return Options{}, fmt.Errorf("%w: weights must be finite and not negative", ErrInvalidOptions)
 		}
+	}
+	if o.ChordToleranceMM == 0 {
+		o.ChordToleranceMM = DefaultChordToleranceMM
+	}
+	if !(o.ChordToleranceMM > 0) || math.IsInf(o.ChordToleranceMM, 0) {
+		return Options{}, fmt.Errorf("%w: chord tolerance must be positive and finite", ErrInvalidOptions)
 	}
 	o.Limits = o.Limits.withDefaults()
 	return o, nil

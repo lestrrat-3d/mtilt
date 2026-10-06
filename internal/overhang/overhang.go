@@ -4,8 +4,9 @@
 // The overhang angle of a downward-facing triangle is the angle between its
 // plane and the horizontal plane: a downward horizontal ceiling is 0 degrees
 // and a vertical wall is 90 degrees. A downward-facing triangle whose angle
-// is below the threshold needs support, unless it lies on the build plate.
-// Upward-facing and vertical triangles never need support.
+// is below the threshold needs support, unless it lies on the build plate or
+// entirely within the plate-anchor height above it. Upward-facing and
+// vertical triangles never need support.
 package overhang
 
 import (
@@ -24,6 +25,10 @@ const (
 	None Kind = iota
 	// BedContact is downward-facing with every vertex on the build plate.
 	BedContact
+	// Anchored is downward-facing, below the threshold, and has every
+	// vertex at or below the plate-anchor height: it is printed from the
+	// plate's first layers and needs no support.
+	Anchored
 	// Demand is downward-facing, below the threshold, and not on the build
 	// plate: it needs support.
 	Demand
@@ -41,9 +46,10 @@ func Angle(n r3.Vec) float64 {
 
 // Classify returns the support class of triangle t. thresholdDeg is the
 // overhang threshold in degrees; bedTol is the height in millimeters at or
-// below which a vertex counts as on the build plate. A triangle with no
-// normal (zero area) is None.
-func Classify(t [3]r3.Vec, thresholdDeg, bedTol float64) Kind {
+// below which a vertex counts as on the build plate; anchor is the
+// plate-anchor height in millimeters. A triangle with no normal (zero area)
+// is None.
+func Classify(t [3]r3.Vec, thresholdDeg, bedTol, anchor float64) Kind {
 	n, ok := t[1].Sub(t[0]).Cross(t[2].Sub(t[0])).Normalize()
 	if !ok || n.Z >= 0 {
 		return None
@@ -51,8 +57,11 @@ func Classify(t [3]r3.Vec, thresholdDeg, bedTol float64) Kind {
 	if t[0].Z <= bedTol && t[1].Z <= bedTol && t[2].Z <= bedTol {
 		return BedContact
 	}
-	if Angle(n) < thresholdDeg {
-		return Demand
+	if Angle(n) >= thresholdDeg {
+		return None
 	}
-	return None
+	if t[0].Z <= anchor && t[1].Z <= anchor && t[2].Z <= anchor {
+		return Anchored
+	}
+	return Demand
 }

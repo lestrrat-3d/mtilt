@@ -6,11 +6,14 @@ import (
 	"math/rand/v2"
 	"testing"
 
+	"github.com/lestrrat-3d/decad"
 	"github.com/lestrrat-3d/mtilt/internal/fixture"
+	"github.com/lestrrat-3d/mtilt/internal/mesh"
 	"github.com/lestrrat-3d/mtilt/internal/orient"
 	"github.com/lestrrat-3d/mtilt/internal/support"
-	"github.com/lestrrat-3d/mtilt/mesh"
 	"github.com/lestrrat-3d/r3"
+	"github.com/lestrrat-3d/sketch"
+	"github.com/lestrrat-3d/units"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,10 +51,27 @@ func build(t *testing.T, soup [][3]r3.Vec) (*mesh.Mesh, *support.Plan, mesh.Tole
 	return placed, plan, tol
 }
 
-func meshes(plan *support.Plan) []*mesh.Mesh {
+// tessellationTolMM is the chord tolerance pillar bodies are tessellated
+// with in these tests.
+const tessellationTolMM = 0.01
+
+// pillarMesh builds pl as a decad body and returns its tessellation and the
+// tessellation's bound.
+func pillarMesh(t *testing.T, p support.Params, pl support.Pillar) (*mesh.Mesh, float64) {
+	t.Helper()
+	body, err := p.Body(t.Context(), sketch.NewWorld(), decad.New(), pl)
+	require.NoError(t, err)
+	require.True(t, body.IsSolid())
+	m, bound, err := mesh.FromBody(t.Context(), body, tessellationTolMM)
+	require.NoError(t, err)
+	return m, bound
+}
+
+func meshes(t *testing.T, plan *support.Plan) []*mesh.Mesh {
+	t.Helper()
 	out := make([]*mesh.Mesh, len(plan.Pillars))
 	for i, pl := range plan.Pillars {
-		out[i] = params.Mesh(pl)
+		out[i], _ = pillarMesh(t, params, pl)
 	}
 	return out
 }
@@ -63,7 +83,7 @@ func requireAllPassed(t *testing.T, checks []mesh.Check) {
 	}
 }
 
-func TestPillarMesh(t *testing.T) {
+func TestPillarBody(t *testing.T) {
 	cases := map[string]support.Params{
 		"default": params,
 		"base as wide as shaft": func() support.Params {
@@ -80,22 +100,35 @@ func TestPillarMesh(t *testing.T) {
 	for name, p := range cases {
 		for _, top := range []float64{p.MinHeight(), 10} {
 			pl := support.Pillar{X: 3, Y: -4, SurfaceZ: top + 0.2, TopZ: top}
-			m := p.Mesh(pl)
+			body, err := p.Body(t.Context(), sketch.NewWorld(), decad.New(), pl)
+			require.NoError(t, err, "%s top %g", name, top)
+			require.True(t, body.IsSolid())
+			require.Len(t, body.Lumps(), 1)
+
+			b, err := body.Bounds()
+			require.NoError(t, err)
+			require.InDelta(t, 0, b.Min.Z, 1e-9)
+			require.InDelta(t, top, b.Max.Z, 1e-9)
+			require.InDelta(t, 3, (b.Min.X+b.Max.X)/2, 1e-9)
+			require.InDelta(t, -4, (b.Min.Y+b.Max.Y)/2, 1e-9)
+			require.InDelta(t, p.BaseWidthMM, b.Max.X-b.Min.X, 1e-6)
+
+			// Volume: base disc, shaft cylinder, and the tip's cone
+			// frustum pi h/3 (r1^2 + r1 r2 + r2^2).
+			rb, rs, rc := p.BaseWidthMM/2, p.PillarWidthMM/2, p.ContactWidthMM/2
+			shaftH := top - p.TipHeightMM - p.BaseThicknessMM
+			want := math.Pi*rb*rb*p.BaseThicknessMM + math.Pi*rs*rs*shaftH +
+				math.Pi*p.TipHeightMM/3*(rs*rs+rs*rc+rc*rc)
+			vol, err := body.Volume()
+			require.NoError(t, err)
+			got, err := vol.Value.In(units.CubicMillimeter)
+			require.NoError(t, err)
+			require.InDelta(t, want, got, 1e-6, "%s top %g", name, top)
+
+			m, _ := pillarMesh(t, p, pl)
 			rep, err := mesh.Validate(t.Context(), m, mesh.ToleranceFor(m.Bounds()))
 			require.NoError(t, err)
 			require.Empty(t, rep.Failed(), "%s top %g", name, top)
-			b := m.Bounds()
-			require.Zero(t, b.Min.Z)
-			require.InDelta(t, top, b.Max.Z, 1e-12)
-			require.InDelta(t, p.BaseWidthMM, b.Max.X-b.Min.X, 1e-12)
-
-			// Volume: base box, shaft box, and the tip frustum
-			// h/3 (A1 + A2 + sqrt(A1 A2)).
-			shaftH := top - p.TipHeightMM - p.BaseThicknessMM
-			a1, a2 := p.PillarWidthMM*p.PillarWidthMM, p.ContactWidthMM*p.ContactWidthMM
-			want := p.BaseWidthMM*p.BaseWidthMM*p.BaseThicknessMM + a1*shaftH +
-				p.TipHeightMM/3*(a1+a2+math.Sqrt(a1*a2))
-			require.InDelta(t, want, m.Volume(), 1e-9, "%s top %g", name, top)
 		}
 	}
 }
@@ -117,7 +150,7 @@ func TestBuild(t *testing.T) {
 			require.NotEmpty(t, plan.Pillars)
 
 			requireAllPassed(t, support.RecheckPlan(placed, plan, params, tol))
-			checks, err := support.ValidateAssembly(t.Context(), placed, meshes(plan), params.TopGapMM, 0, tol)
+			checks, err := support.ValidateAssembly(t.Context(), placed, meshes(t, plan), params.TopGapMM, 0, tol)
 			require.NoError(t, err)
 			requireAllPassed(t, checks)
 
@@ -236,12 +269,12 @@ func splitEveryTriangle(soup [][3]r3.Vec) [][3]r3.Vec {
 
 func TestValidateAssembly(t *testing.T) {
 	placed, plan, tol := build(t, fixture.Bracket())
-	good := meshes(plan)
+	good := meshes(t, plan)
 
 	t.Run("pillar pushed into the model", func(t *testing.T) {
 		pl := plan.Pillars[0]
 		pl.TopZ = pl.SurfaceZ + 1
-		bad := append([]*mesh.Mesh{params.Mesh(pl)}, good[1:]...)
+		bad := append([]*mesh.Mesh{first(t, pl)}, good[1:]...)
 		checks, err := support.ValidateAssembly(t.Context(), placed, bad, params.TopGapMM, 0, tol)
 		require.NoError(t, err)
 		require.Equal(t, mesh.StatusFailed, statusOf(checks, support.CheckSupportModelContact))
@@ -251,7 +284,7 @@ func TestValidateAssembly(t *testing.T) {
 	t.Run("pillar top inside the gap", func(t *testing.T) {
 		pl := plan.Pillars[0]
 		pl.TopZ = pl.SurfaceZ - params.TopGapMM/2
-		bad := append([]*mesh.Mesh{params.Mesh(pl)}, good[1:]...)
+		bad := append([]*mesh.Mesh{first(t, pl)}, good[1:]...)
 		checks, err := support.ValidateAssembly(t.Context(), placed, bad, params.TopGapMM, 0, tol)
 		require.NoError(t, err)
 		require.Equal(t, mesh.StatusPassed, statusOf(checks, support.CheckSupportModelContact))
@@ -261,7 +294,7 @@ func TestValidateAssembly(t *testing.T) {
 	t.Run("overlapping supports", func(t *testing.T) {
 		pl := plan.Pillars[0]
 		pl.X += params.BaseWidthMM / 2
-		bad := append([]*mesh.Mesh{params.Mesh(pl)}, good...)
+		bad := append([]*mesh.Mesh{first(t, pl)}, good...)
 		checks, err := support.ValidateAssembly(t.Context(), placed, bad, params.TopGapMM, 0, tol)
 		require.NoError(t, err)
 		require.Equal(t, mesh.StatusFailed, statusOf(checks, support.CheckSupportSeparation))
@@ -283,6 +316,12 @@ func TestValidateAssembly(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, mesh.StatusFailed, statusOf(checks, support.CheckSupportTopology))
 	})
+}
+
+func first(t *testing.T, pl support.Pillar) *mesh.Mesh {
+	t.Helper()
+	m, _ := pillarMesh(t, params, pl)
+	return m
 }
 
 func statusOf(checks []mesh.Check, name string) mesh.Status {

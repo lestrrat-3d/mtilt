@@ -6,32 +6,27 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/lestrrat-3d/decad"
+	"github.com/lestrrat-3d/mtilt/internal/mesh"
 	"github.com/lestrrat-3d/mtilt/internal/orient"
 	"github.com/lestrrat-3d/mtilt/internal/support"
-	"github.com/lestrrat-3d/mtilt/mesh"
 	"github.com/lestrrat-3d/r3"
+	"github.com/lestrrat-3d/sketch"
+	"github.com/lestrrat-3d/units"
 )
-
-// Input is a mesh to prepare and the unit its coordinates are in.
-type Input struct {
-	// Mesh must not be nil. Prepare and Analyze do not modify it.
-	Mesh *mesh.Mesh
-	// Unit is required: STL coordinates carry no unit.
-	Unit Unit
-	// Source is copied into the report.
-	Source Source
-}
 
 // maxUncoveredListed caps the uncovered samples a candidate report lists.
 const maxUncoveredListed = 10
 
-// session holds the state of one Prepare or Analyze call.
+// session holds the state of one Prepare or Analyze call. Nothing in it is
+// shared between calls.
 type session struct {
 	opts   Options
-	in     Input
-	scale  float64
-	model  *mesh.Mesh // unit-converted input
+	body   *decad.Body
+	model  *mesh.Mesh // the input body's tessellation
+	bound  float64    // its proven distance from the true surface, mm
 	tol    mesh.Tolerance
+	pr     orient.Principal
 	report *Report
 
 	cands  []orient.Candidate
@@ -39,75 +34,110 @@ type session struct {
 	full   []r3.Transform
 }
 
-func newSession(ctx context.Context, in Input, opts Options) (*session, error) {
+func newSession(ctx context.Context, body *decad.Body, opts Options) (*session, error) {
 	opts, err := opts.normalized()
 	if err != nil {
 		return nil, err
 	}
-	if in.Mesh == nil {
-		return nil, fmt.Errorf("%w: input mesh is nil", ErrInvalidOptions)
+	if body == nil {
+		return nil, fmt.Errorf("%w: body is nil", ErrInvalidOptions)
 	}
-	scale, ok := in.Unit.ToMillimeters()
-	if !ok {
-		return nil, fmt.Errorf("%w: unknown input unit %q (use mm, cm, m or in)", ErrInvalidOptions, in.Unit)
-	}
-	if len(in.Mesh.Triangles) > opts.Limits.MaxTriangles {
-		return nil, fmt.Errorf("%w: %d triangles, limit is %d", ErrLimit, len(in.Mesh.Triangles), opts.Limits.MaxTriangles)
-	}
-	s := &session{opts: opts, in: in, scale: scale, model: in.Mesh.Scaled(scale)}
-
-	// Placement moves the model to within one diagonal of the origin, so
-	// tolerances cover both the input coordinates and any placed ones.
-	b := s.model.Bounds()
-	d := b.Diagonal()
-	s.tol = mesh.ToleranceFor(b.Union(mesh.Box{Min: r3.NewVec(-d, -d, -d), Max: r3.NewVec(d, d, d)}))
-
-	mode := "optimize"
-	if opts.KeepOrientation {
-		mode = "keep_orientation"
-	}
+	s := &session{opts: opts, body: body}
 	s.report = &Report{
 		SchemaVersion: SchemaVersion,
 		Tool:          ToolReport{Name: "mtilt", Version: Version, Algorithm: AlgorithmVersion},
-		Input: InputReport{
-			Source:    in.Source,
-			Triangles: len(in.Mesh.Triangles),
-			Vertices:  len(in.Mesh.Vertices),
-			Unit:      in.Unit,
-			ScaleToMM: scale,
-			BoundsMM:  boxArray(b),
-		},
-		Mode:       mode,
-		Tolerances: ToleranceReport{LengthMM: s.tol.Length, SerializationMM: s.tol.Serialization, PlateMM: s.tol.Plate},
-		Profile:    opts.Profile,
-		Limits:     opts.Limits,
-		Supports:   []SupportReport{},
-		Candidates: []CandidateReport{},
+		Mode:          "optimize",
+		Profile:       opts.Profile,
+		Limits:        opts.Limits,
+		Supports:      []SupportReport{},
+		Candidates:    []CandidateReport{},
 	}
-	if in.Source.NormalsDisagreeing > 0 {
-		s.warnf("%d stored facet normals point against the vertex winding; mtilt used the normals computed from the winding", in.Source.NormalsDisagreeing)
+	if opts.KeepOrientation {
+		s.report.Mode = "keep_orientation"
 	}
 	if !opts.Profile.Calibrated {
 		s.warnf("profile %q is not calibrated; its dimensions are illustrative and must be checked by printing", opts.Profile.Name)
 	}
+	s.addUnchecked()
 
-	rep, err := mesh.Validate(ctx, s.model, s.tol)
+	in := &s.report.Input
+	in.Faces = len(body.Faces())
+	in.Lumps = len(body.Lumps())
+	in.ChordToleranceMM = opts.ChordToleranceMM
+	if !body.IsSolid() {
+		return s, s.fail(fmt.Errorf("%w: %w", ErrInvalidBody, decad.ErrNotSolid))
+	}
+	if in.Lumps != 1 {
+		return s, s.fail(fmt.Errorf("%w: the body has %d lumps; mtilt prepares one connected solid", ErrUnsupportedInput, in.Lumps))
+	}
+	if err := s.readBody(); err != nil {
+		return s, s.fail(fmt.Errorf("%w: %w", ErrInvalidBody, err))
+	}
+
+	m, bound, err := mesh.FromBody(ctx, body, opts.ChordToleranceMM)
+	if err != nil {
+		return s, s.fail(fmt.Errorf("%w: %w", ErrInvalidBody, err))
+	}
+	if len(m.Triangles) > opts.Limits.MaxTriangles {
+		return nil, fmt.Errorf("%w: tessellation has %d triangles, limit is %d", ErrLimit, len(m.Triangles), opts.Limits.MaxTriangles)
+	}
+	s.model, s.bound = m, bound
+	in.TessellationTriangles = len(m.Triangles)
+	in.TessellationBoundMM = bound
+
+	// Placement moves the model to within one diagonal of the origin, so
+	// tolerances cover both the input coordinates and any placed ones.
+	b := m.Bounds()
+	d := b.Diagonal()
+	s.tol = mesh.ToleranceFor(b.Union(mesh.Box{Min: r3.NewVec(-d, -d, -d), Max: r3.NewVec(d, d, d)}))
+	s.report.Tolerances = ToleranceReport{LengthMM: s.tol.Length, SerializationMM: s.tol.Serialization, PlateMM: s.tol.Plate}
+
+	rep, err := mesh.Validate(ctx, m, s.tol)
 	if err != nil {
 		return nil, err
 	}
-	s.report.Validation = append(s.report.Validation, prefixChecks("input_", rep.Checks)...)
-	s.report.Input.Components = rep.Components
+	s.report.Validation = append(s.report.Validation, prefixChecks("tessellation_", rep.Checks)...)
 	if failed := rep.Failed(); len(failed) > 0 {
-		base := ErrInvalidMesh
-		if len(failed) == 1 && failed[0].Name == mesh.CheckSingleComponent {
-			base = ErrUnsupportedInput
+		c := failed[0]
+		if c.Name == mesh.CheckSingleComponent {
+			return s, s.fail(fmt.Errorf("%w: tessellation has %d components", ErrUnsupportedInput, rep.Components))
 		}
-		s.addUnchecked()
-		return s, &FailureError{Err: fmt.Errorf("%w: %s: %s", base, failed[0].Name, failed[0].Detail), Report: s.report}
+		return s, s.fail(fmt.Errorf("%w: tessellation check %s failed: %s", ErrInvalidBody, c.Name, c.Detail))
 	}
-	s.report.Input.SurfaceAreaMM2 = s.model.SurfaceArea()
-	s.report.Input.VolumeMM3 = s.model.Volume()
+
+	s.pr = orient.NewPrincipal(m.Inertia())
+	in.LongAxis = vec3(s.pr.Axes[0])
+	in.Elongation = s.pr.Elongation
 	return s, nil
+}
+
+// readBody records decad's own measurements of the input body.
+func (s *session) readBody() error {
+	in := &s.report.Input
+	vol, err := s.body.Volume()
+	if err != nil {
+		return err
+	}
+	if in.VolumeMM3, err = vol.Value.In(units.CubicMillimeter); err != nil {
+		return err
+	}
+	area, err := s.body.Area()
+	if err != nil {
+		return err
+	}
+	if in.SurfaceAreaMM2, err = area.Value.In(units.SquareMillimeter); err != nil {
+		return err
+	}
+	box, err := s.body.Bounds()
+	if err != nil {
+		return err
+	}
+	in.BoundsMM = boxArray(mesh.Box{Min: box.Min, Max: box.Max})
+	return nil
+}
+
+func (s *session) fail(err error) error {
+	return &FailureError{Err: err, Report: s.report}
 }
 
 func (s *session) warnf(format string, args ...any) {
@@ -133,7 +163,7 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 		cands, gen, err := orient.Generate(ctx, s.model, orient.Limits{
 			MaxCandidates:  s.opts.Limits.MaxCandidates,
 			MaxPlanarFaces: s.opts.Limits.MaxPlanarFaces,
-		})
+		}, &s.pr)
 		if err != nil {
 			return nil, err
 		}
@@ -148,11 +178,12 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 	for _, v := range s.model.Vertices {
 		reach = math.Max(reach, v.Sub(centroid).Len())
 	}
-	scale := orient.Scale{SurfaceAreaMM2: s.model.SurfaceArea(), SizeMM: 2 * reach}
+	scale := orient.Scale{SurfaceAreaMM2: s.model.SurfaceArea(), SizeMM: 2 * reach, Elongation: s.pr.Elongation}
 	s.report.Objective = ObjectiveReport{
-		Weights:  s.opts.Weights,
-		Scale:    scale,
-		Formula:  "score = support_demand*projected_demand_area/surface_area + height*height/size - bed_contact*bed_contact_area/surface_area; lower is better",
+		Weights: s.opts.Weights,
+		Scale:   scale,
+		Formula: "score = support_demand*projected_demand_area/surface_area + height*height/size" +
+			" - bed_contact*bed_contact_area/surface_area + strength*elongation*sin^2(long_axis_elevation); lower is better",
 		TieBreak: "feasible before infeasible, then score rounded to score_quantum, then lower candidate id",
 		Quantum:  orient.ScoreQuantum,
 	}
@@ -169,7 +200,8 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 			return nil, fmt.Errorf("mtilt: placing candidate %d: %w", c.ID, err)
 		}
 		s.placed[i], s.full[i] = placed, full
-		met := orient.Measure(placed, s.opts.Profile.OverhangThreshold, s.tol)
+		met := orient.Measure(placed, s.opts.Profile.OverhangThreshold, s.opts.Profile.PlateAnchorMM, s.tol)
+		met.LongAxisElevationDeg = orient.LongAxisElevation(s.pr, c.Rotation)
 		terms, score := orient.Score(met, s.opts.Weights, scale)
 		fit := s.fit(placed.Bounds())
 		cr := CandidateReport{
@@ -182,9 +214,14 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 			Score:    score,
 			Attempt:  AttemptReport{Status: AttemptNotAttempted},
 		}
-		if c.Source == orient.SourcePlanarFace {
+		switch c.Source {
+		case orient.SourcePlanarFace:
 			n, a := vec3(c.FaceNormal), c.FaceAreaMM2
 			cr.FaceNormal, cr.FaceAreaMM2 = &n, &a
+		case orient.SourceTiltedLong:
+			tilt := c.TiltDeg
+			cr.TiltDeg = &tilt
+		case orient.SourceOriginal, orient.SourceAxisAligned, orient.SourceLongAxis:
 		}
 		s.report.Candidates = append(s.report.Candidates, cr)
 		entries[i] = orient.Entry{ID: c.ID, Feasible: fit != fitExceeds, Score: score}
@@ -210,7 +247,7 @@ func (s *session) fit(b mesh.Box) string {
 		return fitUnchecked
 	}
 	hx, hy := v.XMM/2-v.MarginMM, v.YMM/2-v.MarginMM
-	e := s.tol.Length
+	e := s.tol.Length + s.bound
 	if b.Min.X < -hx-e || b.Max.X > hx+e || b.Min.Y < -hy-e || b.Max.Y > hy+e || b.Min.Z < -e || b.Max.Z > v.ZMM-v.MarginMM+e {
 		return fitExceeds
 	}
@@ -219,12 +256,12 @@ func (s *session) fit(b mesh.Box) string {
 
 func (s *session) addUnchecked() {
 	s.report.Unchecked = []Unchecked{
-		{Property: "input_self_intersection", Note: "mtilt does not test whether input triangles cross each other"},
 		{Property: "removal_accessibility", Note: "whether each support can be reached and broken away was not analyzed"},
 		{Property: "physical_printability", Note: "no print, slicer run or material test was performed"},
 		{Property: "slicer_interpretation", Note: "slicers can merge, offset or re-interface support bodies; inspect the sliced preview"},
 		{Property: "bridges", Note: "bridges are not detected; every downward surface below the threshold, including spans between walls, counts as support demand"},
 		{Property: "stability", Note: "centroid_over_contact_hull is a geometric heuristic, not a physical simulation"},
+		{Property: "layer_strength", Note: "the strength term scores the long axis's angle to the plate; no load or layer-adhesion analysis was run"},
 	}
 	if s.opts.Profile.BuildVolume == nil {
 		s.report.Unchecked = append(s.report.Unchecked, Unchecked{
@@ -233,32 +270,50 @@ func (s *session) addUnchecked() {
 	}
 }
 
-// Prepare orients the input for printing and builds breakaway supports for
-// it.
+// planningParams returns the support dimensions planning uses on the
+// tessellation: the profile's, with the top gap and side clearance widened
+// by the tessellation bound, because the true surface can lie that far from
+// the mesh.
+func (s *session) planningParams() support.Params {
+	p := s.opts.Profile.supportParams()
+	p.TopGapMM += s.bound
+	p.SideClearanceMM += s.bound
+	return p
+}
+
+// Prepare orients body for printing and builds breakaway supports for it as
+// decad bodies.
 //
 // Candidates are tried in rank order (see Report.Objective). A candidate
 // that exceeds the build volume is skipped. For each of the first
-// Options.Limits.MaxSupportAttempts remaining candidates, Prepare builds
-// supports (see package internal/support) and validates the assembly; the
-// first candidate whose supports cover all demand and pass every assembly
-// check is selected. A candidate with no support demand needs no supports.
+// Options.Limits.MaxSupportAttempts remaining candidates, Prepare plans
+// supports on the tessellation (see package internal/support) and checks
+// the plan; the first candidate whose plan covers all demand and passes
+// every check is selected. A candidate with no support demand needs no
+// supports.
 //
-// On failure Prepare returns a *FailureError wrapping ErrInvalidMesh,
-// ErrUnsupportedInput or ErrNoFeasibleCandidate, with the report so far. It
-// returns ErrInvalidOptions or ErrLimit unwrapped, and ctx.Err() when ctx is
-// cancelled.
-func Prepare(ctx context.Context, in Input, opts Options) (*Result, error) {
-	s, err := newSession(ctx, in, opts)
+// For the selected candidate only, Prepare adds bodies to body's document:
+// the moved model (body.PlacedCopy; body itself stays live and unchanged)
+// and one revolved pillar per support. It then runs decad's Verify and
+// requires that no two of these bodies interfere and that each is a valid
+// solid, and re-checks the pillars' gaps and spacing on their own
+// tessellations.
+//
+// On failure Prepare returns a *FailureError wrapping ErrInvalidBody,
+// ErrUnsupportedInput, ErrNoFeasibleCandidate or ErrAssembly, with the
+// report so far. It returns ErrInvalidOptions or ErrLimit unwrapped, and
+// ctx.Err() when ctx is cancelled.
+func Prepare(ctx context.Context, body *decad.Body, opts Options) (*Result, error) {
+	s, err := newSession(ctx, body, opts)
 	if err != nil {
 		return nil, err
 	}
-	s.addUnchecked()
 	order, err := s.evaluate(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	params := s.opts.Profile.supportParams()
+	params := s.planningParams()
 	lim := support.Limits{MaxSupports: s.opts.Limits.MaxSupports, MaxSamples: s.opts.Limits.MaxSamples}
 	for i, id := range order {
 		cr := &s.report.Candidates[id]
@@ -276,126 +331,216 @@ func Prepare(ctx context.Context, in Input, opts Options) (*Result, error) {
 			break
 		}
 		s.report.Search.SupportAttempts++
-		res, err := s.attempt(ctx, id, params, lim)
+		plan, err := s.attempt(ctx, id, params, lim)
 		switch {
 		case errors.Is(err, errAttemptFailed):
 			continue
 		case err != nil:
 			return nil, err
 		}
-		return res, nil
+		return s.build(ctx, id, plan)
 	}
-	return nil, &FailureError{
-		Err:    fmt.Errorf("%w: %d of %d candidates attempted, none succeeded", ErrNoFeasibleCandidate, s.report.Search.SupportAttempts, len(s.cands)),
-		Report: s.report,
-	}
+	return nil, s.fail(fmt.Errorf("%w: %d of %d candidates attempted, none succeeded",
+		ErrNoFeasibleCandidate, s.report.Search.SupportAttempts, len(s.cands)))
 }
 
 // errAttemptFailed is returned by attempt when a candidate's supports fail;
 // the reason is recorded in the candidate's report.
 var errAttemptFailed = errors.New("mtilt: support attempt failed")
 
-// attempt builds and validates supports for one candidate.
-func (s *session) attempt(ctx context.Context, id int, params support.Params, lim support.Limits) (*Result, error) {
+// attempt plans and checks supports for one candidate on its tessellation.
+func (s *session) attempt(ctx context.Context, id int, params support.Params, lim support.Limits) (*support.Plan, error) {
 	cr := &s.report.Candidates[id]
 	placed := s.placed[id]
+	failed := func(reason string) (*support.Plan, error) {
+		cr.Attempt.Status, cr.Attempt.Reason = AttemptFailed, reason
+		return nil, errAttemptFailed
+	}
 	plan, err := support.Build(ctx, placed, params, lim, s.tol)
 	switch {
 	case errors.Is(err, support.ErrLimit):
-		cr.Attempt.Status, cr.Attempt.Reason = AttemptFailed, err.Error()
-		return nil, errAttemptFailed
+		return failed(err.Error())
 	case err != nil:
 		return nil, err
 	}
 	cr.Attempt.Samples = plan.Samples
 	cr.Attempt.Supports = len(plan.Pillars)
 	if n := len(plan.Uncovered); n > 0 {
-		cr.Attempt.Status = AttemptFailed
 		cr.Attempt.UncoveredCount = n
 		cr.Attempt.Uncovered = plan.Uncovered[:min(n, maxUncoveredListed)]
-		cr.Attempt.Reason = fmt.Sprintf("coverage gap: %d of %d demand samples uncovered; first: %s", n, plan.Samples, plan.Uncovered[0].Reason)
-		return nil, errAttemptFailed
+		return failed(fmt.Sprintf("coverage gap: %d of %d demand samples uncovered; first: %s", n, plan.Samples, plan.Uncovered[0].Reason))
+	}
+	for _, c := range support.RecheckPlan(placed, plan, params, s.tol) {
+		if c.Status == mesh.StatusFailed {
+			return failed(fmt.Sprintf("plan check %s failed: %s", c.Name, c.Detail))
+		}
+	}
+	all := placed.Bounds()
+	half := s.opts.Profile.BaseWidthMM / 2
+	for _, pl := range plan.Pillars {
+		all = all.Union(mesh.Box{Min: r3.NewVec(pl.X-half, pl.Y-half, 0), Max: r3.NewVec(pl.X+half, pl.Y+half, pl.TopZ)})
+	}
+	if s.fit(all) == fitExceeds {
+		return failed("model plus supports exceed the build volume")
+	}
+	return plan, nil
+}
+
+// build turns the selected candidate's plan into decad bodies and verifies
+// them.
+func (s *session) build(ctx context.Context, id int, plan *support.Plan) (*Result, error) {
+	cr := &s.report.Candidates[id]
+	rep := s.report
+	full := s.full[id]
+
+	model, err := s.body.PlacedCopy(ctx, full)
+	if err != nil {
+		return nil, fmt.Errorf("mtilt: placing the model: %w", err)
+	}
+	res := &Result{Model: model, Transform: full, Report: *rep}
+	params := s.opts.Profile.supportParams()
+	w := sketch.NewWorld()
+	for _, pl := range plan.Pillars {
+		pb, err := params.Body(ctx, w, s.body.Document(), pl)
+		if err != nil {
+			return nil, fmt.Errorf("mtilt: building support body: %w", err)
+		}
+		res.Supports = append(res.Supports, pb)
 	}
 
-	supports := make([]*mesh.Mesh, len(plan.Pillars))
-	for i, pl := range plan.Pillars {
-		supports[i] = params.Mesh(pl)
-	}
-	checks := support.RecheckPlan(placed, plan, params, s.tol)
-	more, err := support.ValidateAssembly(ctx, placed, supports, params.TopGapMM, 0, s.tol)
+	checks, err := s.verifyAssembly(ctx, res)
 	if err != nil {
 		return nil, err
 	}
-	checks = append(checks, more...)
-	all := placed.Bounds()
-	for _, m := range supports {
-		all = all.Union(m.Bounds())
-	}
-	switch s.fit(all) {
-	case fitFits:
-		checks = append(checks, mesh.Check{Name: "assembly_build_volume_fit", Status: mesh.StatusPassed})
-	case fitExceeds:
-		checks = append(checks, mesh.Check{Name: "assembly_build_volume_fit", Status: mesh.StatusFailed, Detail: "model plus supports exceed the build volume"})
-	default:
-		checks = append(checks, mesh.Check{Name: "assembly_build_volume_fit", Status: mesh.StatusUnchecked, Detail: "the profile has no build_volume"})
-	}
-	if s.full[id].IsReflection() {
-		checks = append(checks, mesh.Check{Name: "proper_rigid_transform", Status: mesh.StatusFailed, Detail: "transform mirrors the model"})
+	rep.Validation = append(rep.Validation, checks...)
+	if full.IsReflection() {
+		rep.Validation = append(rep.Validation, mesh.Check{Name: "proper_rigid_transform", Status: mesh.StatusFailed, Detail: "transform mirrors the model"})
 	} else {
-		checks = append(checks, mesh.Check{Name: "proper_rigid_transform", Status: mesh.StatusPassed})
-	}
-	for _, c := range checks {
-		if c.Status == mesh.StatusFailed {
-			cr.Attempt.Status = AttemptFailed
-			cr.Attempt.Reason = fmt.Sprintf("assembly check %s failed: %s", c.Name, c.Detail)
-			return nil, errAttemptFailed
-		}
+		rep.Validation = append(rep.Validation, mesh.Check{Name: "proper_rigid_transform", Status: mesh.StatusPassed})
 	}
 
 	cr.Attempt.Status = AttemptSucceeded
 	if len(plan.Pillars) == 0 {
 		cr.Attempt.Status = AttemptNotNeeded
 	}
-	rep := s.report
-	rep.Validation = append(rep.Validation, checks...)
 	rep.Selected = &cr.ID
-	tr, err := transformReport(s.full[id], s.scale)
+	if rep.Transform, err = transformReport(full); err != nil {
+		return nil, err
+	}
+	mb, err := model.Bounds()
 	if err != nil {
 		return nil, err
 	}
-	rep.Transform = tr
-	rep.Model = &ModelReport{BoundsMM: boxArray(placed.Bounds()), VolumeMM3: placed.Volume()}
+	rep.Model = &ModelReport{BoundsMM: boxArray(mesh.Box{Min: mb.Min, Max: mb.Max}), VolumeMM3: rep.Input.VolumeMM3}
 	for i, pl := range plan.Pillars {
-		rep.Supports = append(rep.Supports, SupportReport{
+		sr := SupportReport{
 			ID:         fmt.Sprintf("support-%04d", i+1),
 			CenterMM:   [2]float64{pl.X, pl.Y},
 			SurfaceZMM: pl.SurfaceZ,
 			TopZMM:     pl.TopZ,
 			Origin:     string(pl.Origin),
-			VolumeMM3:  supports[i].Volume(),
-			BoundsMM:   boxArray(supports[i].Bounds()),
-		})
+		}
+		if vol, err := res.Supports[i].Volume(); err == nil {
+			sr.VolumeMM3, _ = vol.Value.In(units.CubicMillimeter)
+		}
+		if b, err := res.Supports[i].Bounds(); err == nil {
+			sr.BoundsMM = boxArray(mesh.Box{Min: b.Min, Max: b.Max})
+		}
+		rep.Supports = append(rep.Supports, sr)
 	}
-	if plan.DemandTriangles > 0 {
-		s.warnf("support geometry passed mtilt's geometric checks only; breakaway behavior depends on the printer, material and slicer and has not been tested")
+	if len(plan.Pillars) > 0 {
+		s.warnf("support geometry passed mtilt's and decad's geometric checks only; breakaway behavior depends on the printer, material and slicer and has not been tested")
 	}
-	return &Result{Model: placed, Supports: supports, Transform: s.full[id], Report: *rep}, nil
+	res.Report = *rep
+
+	for _, c := range rep.Validation {
+		if c.Status == mesh.StatusFailed {
+			cr.Attempt.Status = AttemptFailed
+			cr.Attempt.Reason = fmt.Sprintf("assembly check %s failed: %s", c.Name, c.Detail)
+			rep.Selected = nil
+			res.Report = *rep
+			return nil, &FailureError{Err: fmt.Errorf("%w: %s: %s", ErrAssembly, c.Name, c.Detail), Report: rep, Result: res}
+		}
+	}
+	return res, nil
 }
 
-// Analysis is the outcome of Analyze: input validation, geometry, and the
-// ranked candidate orientations. Analyze builds no supports, so every
-// candidate's support attempt is not_attempted.
+// verifyAssembly runs decad's Verify over the document and keeps the rows
+// that concern the assembly's own bodies, then re-checks the pillars on
+// their tessellations.
+func (s *session) verifyAssembly(ctx context.Context, res *Result) ([]mesh.Check, error) {
+	ours := map[*decad.Body]string{res.Model: "model"}
+	for i, b := range res.Supports {
+		ours[b] = fmt.Sprintf("support-%04d", i+1)
+	}
+	vr, err := s.body.Document().Verify(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("mtilt: decad verify: %w", err)
+	}
+	validity := mesh.Check{Name: "decad_body_validity", Status: mesh.StatusPassed}
+	seen := 0
+	for _, br := range vr.Bodies {
+		name, ok := ours[br.Body]
+		if !ok {
+			continue
+		}
+		seen++
+		if br.Validity.Outcome != decad.ValidityValid && validity.Status == mesh.StatusPassed {
+			validity.Status = mesh.StatusFailed
+			validity.Detail = fmt.Sprintf("%s: decad validity outcome %v", name, br.Validity.Outcome)
+		}
+	}
+	if seen != len(ours) && validity.Status == mesh.StatusPassed {
+		validity.Status = mesh.StatusFailed
+		validity.Detail = fmt.Sprintf("decad reported %d of %d assembly bodies", seen, len(ours))
+	}
+	interference := mesh.Check{Name: "decad_interference", Status: mesh.StatusPassed}
+	for _, in := range vr.Interferences {
+		a, okA := ours[in.A]
+		b, okB := ours[in.B]
+		if okA && okB {
+			interference.Status = mesh.StatusFailed
+			interference.Detail = fmt.Sprintf("%s and %s overlap by %s", a, b, in.Volume.Value)
+			break
+		}
+	}
+	checks := []mesh.Check{validity, interference}
+
+	model, mbound, err := mesh.FromBody(ctx, res.Model, s.opts.ChordToleranceMM)
+	if err != nil {
+		return nil, err
+	}
+	supports := make([]*mesh.Mesh, len(res.Supports))
+	var sbound float64
+	for i, b := range res.Supports {
+		m, bound, err := mesh.FromBody(ctx, b, s.opts.ChordToleranceMM)
+		if err != nil {
+			return nil, err
+		}
+		supports[i] = m
+		sbound = math.Max(sbound, bound)
+	}
+	more, err := support.ValidateAssembly(ctx, model, supports, s.opts.Profile.TopContactGapMM, mbound+sbound, s.tol)
+	if err != nil {
+		return nil, err
+	}
+	return append(checks, prefixChecks("tessellated_", more)...), nil
+}
+
+// Analysis is the outcome of Analyze: the input readings and the ranked
+// candidate orientations. Analyze builds no supports and adds no bodies to
+// the document, so every candidate's support attempt is not_attempted.
 type Analysis struct {
 	Report Report
 	// Ranking lists candidate IDs best first.
 	Ranking []int
 }
 
-// Analyze validates the input and measures and ranks candidate orientations
-// without building supports. When the input fails validation it returns the
-// analysis so far together with a *FailureError.
-func Analyze(ctx context.Context, in Input, opts Options) (*Analysis, error) {
-	s, err := newSession(ctx, in, opts)
+// Analyze measures and ranks candidate orientations of body without building
+// supports. When the body is not a supported input it returns the analysis
+// so far together with a *FailureError.
+func Analyze(ctx context.Context, body *decad.Body, opts Options) (*Analysis, error) {
+	s, err := newSession(ctx, body, opts)
 	if err != nil {
 		var fe *FailureError
 		if errors.As(err, &fe) {
@@ -403,74 +548,9 @@ func Analyze(ctx context.Context, in Input, opts Options) (*Analysis, error) {
 		}
 		return nil, err
 	}
-	s.addUnchecked()
 	order, err := s.evaluate(ctx)
 	if err != nil {
 		return nil, err
 	}
 	return &Analysis{Report: *s.report, Ranking: order}, nil
-}
-
-// ValidateSerialized checks meshes read back from the files written for res
-// against res itself. model and supports must hold the triangles in the
-// order they were written. Coordinates may differ by the serialization
-// tolerance recorded in the report; topology checks run again, and the
-// support assembly checks run again on the re-read meshes.
-func ValidateSerialized(ctx context.Context, res *Result, model *mesh.Mesh, supports []*mesh.Mesh) ([]mesh.Check, error) {
-	tol := mesh.Tolerance{
-		Length:        res.Report.Tolerances.LengthMM,
-		Serialization: res.Report.Tolerances.SerializationMM,
-		Plate:         res.Report.Tolerances.PlateMM,
-	}
-	var checks []mesh.Check
-
-	modelCheck := mesh.Check{Name: "serialized_model_matches", Status: mesh.StatusPassed}
-	if d, ok := maxDeviation(res.Model, model); !ok {
-		modelCheck.Status, modelCheck.Detail = mesh.StatusFailed, "triangle count differs"
-	} else if d > tol.Serialization {
-		modelCheck.Status, modelCheck.Detail = mesh.StatusFailed, fmt.Sprintf("a coordinate moved %g mm, allowance %g", d, tol.Serialization)
-	}
-	checks = append(checks, modelCheck)
-
-	rep, err := mesh.Validate(ctx, model, tol)
-	if err != nil {
-		return nil, err
-	}
-	checks = append(checks, prefixChecks("serialized_model_", rep.Checks)...)
-
-	supportCheck := mesh.Check{Name: "serialized_supports_match", Status: mesh.StatusPassed}
-	if len(supports) != len(res.Supports) {
-		supportCheck.Status, supportCheck.Detail = mesh.StatusFailed, "support count differs"
-	} else {
-		for i := range supports {
-			d, ok := maxDeviation(res.Supports[i], supports[i])
-			if !ok || d > tol.Serialization {
-				supportCheck.Status = mesh.StatusFailed
-				supportCheck.Detail = fmt.Sprintf("support %d differs from what was built", i+1)
-				break
-			}
-		}
-	}
-	checks = append(checks, supportCheck)
-
-	more, err := support.ValidateAssembly(ctx, model, supports, res.Report.Profile.TopContactGapMM, 2*tol.Serialization, tol)
-	if err != nil {
-		return nil, err
-	}
-	return append(checks, prefixChecks("serialized_", more)...), nil
-}
-
-func maxDeviation(want, got *mesh.Mesh) (float64, bool) {
-	if len(want.Triangles) != len(got.Triangles) {
-		return 0, false
-	}
-	var d float64
-	for i := range want.Triangles {
-		a, b := want.Triangle(i), got.Triangle(i)
-		for k := range 3 {
-			diff := a[k].Sub(b[k])
-			d = math.Max(d, math.Max(math.Abs(diff.X), math.Max(math.Abs(diff.Y), math.Abs(diff.Z))))
-		}
-	}
-	return d, true
 }

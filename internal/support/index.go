@@ -3,7 +3,7 @@ package support
 import (
 	"math"
 
-	"github.com/lestrrat-3d/mtilt/mesh"
+	"github.com/lestrrat-3d/mtilt/internal/mesh"
 	"github.com/lestrrat-3d/r3"
 )
 

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/lestrrat-3d/mtilt/internal/fixture"
-	"github.com/lestrrat-3d/mtilt/mesh"
+	"github.com/lestrrat-3d/mtilt/internal/mesh"
 	"github.com/lestrrat-3d/r3"
 	"github.com/stretchr/testify/require"
 )
@@ -141,6 +141,19 @@ func TestMeasurements(t *testing.T) {
 	require.InDelta(t, (10*40+30*10)*20, bracket.Volume(), 1e-9)
 }
 
+func TestInertia(t *testing.T) {
+	// A 40 x 20 x 10 box: I_xx = V (b^2 + c^2) / 12 etc., products zero.
+	m := build(t, fixture.Box(r3.NewVec(5, -3, 2), r3.NewVec(45, 17, 12)))
+	v := 40.0 * 20 * 10
+	in := m.Inertia()
+	require.InDelta(t, v*(20*20+10*10)/12, in.XX, 1e-6)
+	require.InDelta(t, v*(40*40+10*10)/12, in.YY, 1e-6)
+	require.InDelta(t, v*(40*40+20*20)/12, in.ZZ, 1e-6)
+	require.InDelta(t, 0, in.XY, 1e-6)
+	require.InDelta(t, 0, in.XZ, 1e-6)
+	require.InDelta(t, 0, in.YZ, 1e-6)
+}
+
 func TestTransformed(t *testing.T) {
 	m := build(t, fixture.ObliqueCuboid())
 	rot, err := r3.FromBasis(r3.Basis{EX: r3.NewVec(0, 1, 0), EY: r3.NewVec(0, 0, 1), EZ: r3.NewVec(1, 0, 0)}, r3.NewVec(3, -4, 5))
@@ -158,6 +171,7 @@ func TestTransformed(t *testing.T) {
 		require.True(t, back.Vertices[i].Equal(m.Vertices[i], 1e-12))
 	}
 
-	scaled := m.Scaled(25.4)
-	require.InDelta(t, m.Volume()*25.4*25.4*25.4, scaled.Volume(), 1e-6)
+	a, b := m.Inertia(), moved.Inertia()
+	// The trace of an inertia tensor does not change under rotation.
+	require.InDelta(t, a.XX+a.YY+a.ZZ, b.XX+b.YY+b.ZZ, 1e-6*(a.XX+a.YY+a.ZZ))
 }

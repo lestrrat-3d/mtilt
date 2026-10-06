@@ -4,33 +4,39 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/lestrrat-3d/decad"
+	"github.com/lestrrat-3d/mtilt/internal/mesh"
 	"github.com/lestrrat-3d/mtilt/internal/orient"
 	"github.com/lestrrat-3d/mtilt/internal/support"
-	"github.com/lestrrat-3d/mtilt/mesh"
 	"github.com/lestrrat-3d/r3"
 )
 
 // Version identifiers recorded in every report.
 const (
 	// SchemaVersion is the version of the Report JSON layout.
-	SchemaVersion = 1
+	SchemaVersion = 2
 	// Version is the mtilt release.
 	Version = "0.1.0-dev"
 	// AlgorithmVersion names the orientation search and the support
 	// strategy. It changes whenever either can produce different output
 	// for the same input and options.
-	AlgorithmVersion = "orient-1/pillar-1"
+	AlgorithmVersion = "orient-2/pillar-2"
 )
 
 // Errors Prepare and Analyze return. Failures that carry a report are
 // wrapped in *FailureError.
 var (
-	// ErrInvalidMesh reports an input mesh that fails a validation check.
-	ErrInvalidMesh = errors.New("mtilt: invalid mesh")
-	// ErrUnsupportedInput reports a valid-looking input outside the
-	// supported topology: more than one connected component (including
-	// nested shells).
+	// ErrInvalidBody reports an input body that is not a solid, or whose
+	// tessellation fails a check.
+	ErrInvalidBody = errors.New("mtilt: invalid body")
+	// ErrUnsupportedInput reports a solid outside the supported topology:
+	// more than one lump.
 	ErrUnsupportedInput = errors.New("mtilt: unsupported input")
+	// ErrAssembly reports that the support bodies built for the selected
+	// candidate failed decad's verification. The bodies stay live in the
+	// input body's document (decad has no way to remove them), and the
+	// FailureError's Result holds them.
+	ErrAssembly = errors.New("mtilt: support assembly failed verification")
 	// ErrNoFeasibleCandidate reports that no evaluated orientation got a
 	// complete, validated set of supports within the work limits.
 	ErrNoFeasibleCandidate = errors.New("mtilt: no feasible orientation")
@@ -43,20 +49,24 @@ var (
 type FailureError struct {
 	Err    error
 	Report *Report
+	// Result is set only with ErrAssembly: the bodies that were built.
+	Result *Result
 }
 
 func (e *FailureError) Error() string { return e.Err.Error() }
 func (e *FailureError) Unwrap() error { return e.Err }
 
-// Result is a successful preparation.
+// Result is a successful preparation. Model and Supports are live bodies in
+// the input body's document; the input body itself is left live and
+// unchanged.
 type Result struct {
-	// Model is the input model converted to millimeters and moved by
-	// Transform.
-	Model *mesh.Mesh
+	// Model is a copy of the input body moved by Transform
+	// (decad.Body.PlacedCopy).
+	Model *decad.Body
 	// Supports are the support bodies, in the same frame as Model, in
 	// Report.Supports order.
-	Supports []*mesh.Mesh
-	// Transform maps the input, after unit conversion, to the output frame.
+	Supports []*decad.Body
+	// Transform maps the input body to Model.
 	Transform r3.Transform
 	Report    Report
 }
@@ -92,26 +102,24 @@ type ToolReport struct {
 	Algorithm string `json:"algorithm"`
 }
 
-// Source describes where an input mesh came from. The library copies it into
-// reports and does not interpret it.
-type Source struct {
-	SHA256             string `json:"sha256,omitempty"`
-	Format             string `json:"format,omitempty"`
-	Name               string `json:"name,omitempty"`
-	NormalsDisagreeing int    `json:"stored_normals_disagreeing"`
-}
-
-// InputReport records the input and its unit conversion.
+// InputReport describes the input body and the tessellation mtilt planned on.
 type InputReport struct {
-	Source
-	Triangles      int           `json:"triangles"`
-	Vertices       int           `json:"vertices"`
-	Unit           Unit          `json:"unit"`
-	ScaleToMM      float64       `json:"scale_to_mm"`
-	SurfaceAreaMM2 float64       `json:"surface_area_mm2"`
+	Faces          int           `json:"faces"`
+	Lumps          int           `json:"lumps"`
 	VolumeMM3      float64       `json:"volume_mm3"`
+	SurfaceAreaMM2 float64       `json:"surface_area_mm2"`
 	BoundsMM       [2][3]float64 `json:"bounds_mm"`
-	Components     int           `json:"components"`
+	// TessellationTriangles and TessellationBoundMM describe the mesh
+	// decad produced at ChordToleranceMM; the bound is decad's proven
+	// distance from the true surface to the mesh.
+	ChordToleranceMM      float64 `json:"chord_tolerance_mm"`
+	TessellationTriangles int     `json:"tessellation_triangles"`
+	TessellationBoundMM   float64 `json:"tessellation_bound_mm"`
+	// LongAxis is the principal axis with the smallest moment of inertia,
+	// in the input frame, and Elongation is how much longer the body is
+	// along it than across it (see orient.Principal).
+	LongAxis   [3]float64 `json:"long_axis"`
+	Elongation float64    `json:"elongation"`
 }
 
 // ToleranceReport records the numeric tolerances used (see mesh.Tolerance).
@@ -153,6 +161,7 @@ type CandidateReport struct {
 	Rotation    [3][3]float64  `json:"rotation"`
 	FaceNormal  *[3]float64    `json:"face_normal,omitempty"`
 	FaceAreaMM2 *float64       `json:"face_area_mm2,omitempty"`
+	TiltDeg     *float64       `json:"tilt_deg,omitempty"`
 	Metrics     orient.Metrics `json:"metrics"`
 	// Fit is "fits", "exceeds" or "unchecked" (no build volume).
 	Fit     string        `json:"build_volume_fit"`
@@ -179,28 +188,22 @@ type AttemptReport struct {
 	Uncovered      []support.Sample `json:"uncovered_first,omitempty"`
 }
 
-// TransformReport records the rigid transform from the unit-converted input
-// to the output frame.
+// TransformReport records the rigid transform from the input body to the
+// output model.
 //
-// A point p of the input file maps to the output as
-//
-//	q = R * (ScaleToMM * p) + t
-//
-// Matrix is the 4x4 homogeneous form [R t; 0 0 0 1], stored row-major, that
-// acts on column vectors (x, y, z, 1) of millimeter coordinates. Inverse is
-// [R^T, -R^T t; 0 0 0 1]; applying it to an output point and dividing by
-// ScaleToMM returns the input point.
+// A point p of the input body maps to the output as q = R * p + t. Matrix is
+// the 4x4 homogeneous form [R t; 0 0 0 1], stored row-major, that acts on
+// column vectors (x, y, z, 1) of millimeter coordinates. Inverse is
+// [R^T, -R^T t; 0 0 0 1].
 type TransformReport struct {
-	ScaleToMM   float64       `json:"scale_to_mm"`
 	Matrix      [4][4]float64 `json:"matrix"`
 	Inverse     [4][4]float64 `json:"inverse"`
 	Translation [3]float64    `json:"translation_mm"`
 	Convention  string        `json:"convention"`
 }
 
-// ModelReport describes the output model.
+// ModelReport describes the output model body, as decad measures it.
 type ModelReport struct {
-	File      string        `json:"file,omitempty"`
 	BoundsMM  [2][3]float64 `json:"bounds_mm"`
 	VolumeMM3 float64       `json:"volume_mm3"`
 }
@@ -208,7 +211,6 @@ type ModelReport struct {
 // SupportReport describes one support body.
 type SupportReport struct {
 	ID         string        `json:"id"`
-	File       string        `json:"file,omitempty"`
 	CenterMM   [2]float64    `json:"center_mm"`
 	SurfaceZMM float64       `json:"held_surface_z_mm"`
 	TopZMM     float64       `json:"top_z_mm"`
@@ -254,16 +256,15 @@ func homogeneous(t r3.Transform) [4][4]float64 {
 	}
 }
 
-func transformReport(t r3.Transform, scale float64) (*TransformReport, error) {
+func transformReport(t r3.Transform) (*TransformReport, error) {
 	inv, err := t.Inverse()
 	if err != nil {
 		return nil, fmt.Errorf("mtilt: inverting transform: %w", err)
 	}
 	return &TransformReport{
-		ScaleToMM:   scale,
 		Matrix:      homogeneous(t),
 		Inverse:     homogeneous(inv),
 		Translation: vec3(t.Translation()),
-		Convention:  "q = R * (scale_to_mm * p) + t; matrix is row-major [R t; 0 0 0 1] acting on column vectors (x, y, z, 1) in mm",
+		Convention:  "q = R * p + t; matrix is row-major [R t; 0 0 0 1] acting on column vectors (x, y, z, 1) in mm",
 	}, nil
 }

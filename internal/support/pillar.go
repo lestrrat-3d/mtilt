@@ -1,23 +1,31 @@
-// Package support builds and checks mtilt's breakaway supports: separate
-// vertical pillars rooted on the build plate, each a closed mesh of stacked
-// axis-aligned square sections.
+// Package support plans and checks mtilt's breakaway supports: separate
+// vertical round pillars rooted on the build plate, each one decad body.
+// Planning runs on a tessellation of the placed model; Params.Body turns each
+// planned pillar into a decad body.
 //
 // A pillar, from the plate up:
 //
-//   - a base pad BaseWidthMM square and BaseThicknessMM tall;
-//   - a shaft PillarWidthMM square, up to TipHeightMM below the top;
-//   - a tip that narrows from PillarWidthMM to ContactWidthMM over
+//   - a base disc BaseWidthMM across and BaseThicknessMM tall;
+//   - a shaft PillarWidthMM across, up to TipHeightMM below the top;
+//   - a tip that narrows from PillarWidthMM to ContactWidthMM across over
 //     TipHeightMM;
-//   - a ContactWidthMM square top face, TopGapMM (plus a numeric slack)
-//     below the lowest point of the part above that square.
+//   - a ContactWidthMM-wide top face, TopGapMM (plus a numeric slack)
+//     below the lowest point of the part above the square that encloses it.
+//
+// Planning and the clearance zones use the square that encloses each round
+// section, so every check made on the squares holds for the round pillar.
 //
 // The pillar never touches the part: the top gap is left for the slicer to
 // bridge or not, as its own settings decide.
 package support
 
 import (
-	"github.com/lestrrat-3d/mtilt/mesh"
+	"context"
+	"fmt"
+
+	"github.com/lestrrat-3d/decad"
 	"github.com/lestrrat-3d/r3"
+	"github.com/lestrrat-3d/sketch"
 )
 
 // Params are the support dimensions, in millimeters and degrees. Callers
@@ -32,6 +40,8 @@ type Params struct {
 	BaseThicknessMM float64
 	TopGapMM        float64
 	SideClearanceMM float64
+	// PlateAnchorMM is the plate-anchor height (see package overhang).
+	PlateAnchorMM float64
 }
 
 // MinHeight is the shortest pillar these params can build: base plus tip.
@@ -78,7 +88,8 @@ type level struct {
 	z, half float64
 }
 
-// levels returns the pillar's square sections from the plate up. Two
+// levels returns the pillar's sections from the plate up, each as a height
+// and a half-width (the radius of the round section). Two
 // consecutive sections at the same height form a horizontal ledge.
 func (p Params) levels(pl Pillar) []level {
 	base, shaft, contact := p.BaseWidthMM/2, p.PillarWidthMM/2, p.ContactWidthMM/2
@@ -93,31 +104,48 @@ func (p Params) levels(pl Pillar) []level {
 	return append(out, level{pl.TopZ, contact})
 }
 
-// Mesh returns the pillar as a closed, outward-wound triangle mesh.
-func (p Params) Mesh(pl Pillar) *mesh.Mesh {
-	lv := p.levels(pl)
-	m := &mesh.Mesh{}
-	for _, l := range lv {
-		h := l.half
-		m.Vertices = append(m.Vertices,
-			r3.NewVec(pl.X-h, pl.Y-h, l.z), r3.NewVec(pl.X+h, pl.Y-h, l.z),
-			r3.NewVec(pl.X+h, pl.Y+h, l.z), r3.NewVec(pl.X-h, pl.Y+h, l.z),
-		)
+// Body builds the pillar as a decad body in doc: the stepped outline of
+// levels, revolved a full turn about the pillar's axis. Each level's
+// half-width becomes a radius, so the base, shaft and contact are round. The
+// outline is drawn in a new sketch in w, revolved about the sketch's U axis,
+// and placed upright at (X, Y); only the placed body stays live in doc.
+func (p Params) Body(ctx context.Context, w *sketch.World, doc *decad.Document, pl Pillar) (*decad.Body, error) {
+	s, err := w.CreateSketch(w.XY())
+	if err != nil {
+		return nil, err
 	}
-	// Bottom cap, facing -Z.
-	m.Triangles = append(m.Triangles, [3]uint32{0, 2, 1}, [3]uint32{0, 3, 2})
-	for i := range len(lv) - 1 {
-		lo, hi := uint32(4*i), uint32(4*(i+1))
-		for k := range uint32(4) {
-			a, b := lo+k, lo+(k+1)%4
-			c, d := hi+(k+1)%4, hi+k
-			m.Triangles = append(m.Triangles, [3]uint32{a, b, c}, [3]uint32{a, c, d})
-		}
+	// U is height along the pillar axis, V is radius.
+	outline := [][2]float64{{0, 0}}
+	for _, l := range p.levels(pl) {
+		outline = append(outline, [2]float64{l.z, l.half})
 	}
-	// Top cap, facing +Z.
-	top := uint32(4 * (len(lv) - 1))
-	m.Triangles = append(m.Triangles, [3]uint32{top, top + 1, top + 2}, [3]uint32{top, top + 2, top + 3})
-	return m
+	outline = append(outline, [2]float64{pl.TopZ, 0})
+	pts := make([]*sketch.Point, len(outline))
+	for i, o := range outline {
+		pts[i] = s.CreatePoint(o[0], o[1])
+		s.Fix(pts[i])
+	}
+	for i := range pts {
+		s.CreateLine(pts[i], pts[(i+1)%len(pts)])
+	}
+	if _, err := s.Solve(ctx); err != nil {
+		return nil, fmt.Errorf("support: solving pillar outline: %w", err)
+	}
+	profiles := s.Profiles()
+	if len(profiles) != 1 {
+		return nil, fmt.Errorf("support: pillar outline gave %d profiles", len(profiles))
+	}
+	axis := decad.SketchLine{Start: decad.Point2{U: 0, V: 0}, End: decad.Point2{U: 1, V: 0}}
+	body, err := doc.Revolve(s, profiles[0], axis, decad.FullRevolution{})
+	if err != nil {
+		return nil, fmt.Errorf("support: revolving pillar: %w", err)
+	}
+	// The sketch's U (world X) becomes +Z; its V (world Y) stays Y.
+	up, err := r3.FromBasis(r3.Basis{EX: r3.NewVec(0, 0, 1), EY: r3.NewVec(0, 1, 0), EZ: r3.NewVec(-1, 0, 0)}, r3.NewVec(pl.X, pl.Y, 0))
+	if err != nil {
+		return nil, err
+	}
+	return body.Placed(ctx, up)
 }
 
 // clearanceZones returns the solids that must not touch the part:

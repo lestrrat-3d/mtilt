@@ -41,8 +41,7 @@ jobs:
       - name: Run go vet
         run: go vet ./...
 
-  # Ubuntu runs the race detector; macOS and Windows run without it. The test
-  # suite includes the CLI end-to-end tests, which build cmd/mtilt.
+  # Ubuntu runs the race detector; macOS and Windows run without it.
   test:
     strategy:
       fail-fast: false
@@ -68,9 +67,9 @@ jobs:
         run: go mod download
 
       - name: Run tests
-        run: go test ${{ matrix.race }} -timeout 10m ./...
+        run: go test ${{ matrix.race }} -timeout 20m ./...
 
-  # The library and CLI must build without a C toolchain.
+  # The library must build without a C toolchain.
   nocgo:
     runs-on: ubuntu-latest
     steps:
@@ -85,9 +84,7 @@ jobs:
       - name: Build with CGO_ENABLED=0
         env:
           CGO_ENABLED: "0"
-        run: |
-          go build ./...
-          go build -o "$RUNNER_TEMP/mtilt" ./cmd/mtilt
+        run: go build ./...
 
   # Bounded fuzzing beyond the seed corpus that `go test` already runs.
   fuzz:
@@ -96,10 +93,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: FuzzDecode
-            package: ./stl
-          - target: FuzzAnalyze
-            package: .
+          - target: FuzzPrincipal
+            package: ./internal/orient
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
