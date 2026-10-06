@@ -107,6 +107,38 @@ jobs:
       - name: Fuzz ${{ matrix.target }}
         run: go test -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 60s ${{ matrix.package }}
 
+  # The README image program is its own module under _gallery; ./... above
+  # skips it. This job checks it builds against the current library and
+  # renders one shot.
+  gallery:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: _gallery
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: _gallery/go.mod
+          cache-dependency-path: _gallery/go.sum
+
+      - name: Tidy dependencies
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Render one shot
+        run: go run . -only oblique-cuboid -out "$RUNNER_TEMP/gallery"
+
   # Verify the tree is tidy.
   verify:
     runs-on: ubuntu-latest

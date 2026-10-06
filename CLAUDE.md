@@ -36,6 +36,7 @@ go vet ./...             # MUST pass
 golangci-lint run        # v2.12.2, config .golangci.yml (copied from kinetograph)
 CGO_ENABLED=0 go build ./...
 go test -run '^$' -fuzz FuzzPrincipal -fuzztime 30s ./internal/orient
+cd _gallery && go run .  # regenerate docs/images after changing orientation or supports
 ```
 
 Local `golangci-lint` version MUST match CI's before trusting a clean local run.
@@ -70,6 +71,8 @@ Local `golangci-lint` version MUST match CI's before trusting a clean local run.
 - **Keep long axis, estimate/search, measurement and ranking separate** (`internal/orient/` files).
 - **NEVER add a no-op option, placeholder support, fake score or stub package.** Unbuilt features go in
   `docs/roadmap.md`.
+- **README images come from `_gallery/` (own module).** Regenerate and commit `docs/images/*.png` whenever a
+  change alters an orientation or a support layout. NEVER import solidlens into the root module.
 - **NEVER add a `go.mod` dependency without recording it in `docs/design.md` section 11.** Approved:
   `github.com/lestrrat-3d/decad`, `github.com/lestrrat-3d/sketch`, `github.com/lestrrat-3d/r3`,
   `github.com/lestrrat-3d/units`, `github.com/stretchr/testify` (tests only). No cgo, network, Python, external
