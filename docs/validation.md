@@ -31,11 +31,13 @@ Record every run in the log below, including failures. Steps:
 2. Note the slicer name and exact version.
 3. Import the model and every support file as parts of one object, so their relative positions are kept.
 4. Confirm the pillars stand under the arm, and that the slicer did not move, center or drop any part.
-5. Turn off the slicer's own supports for the object.
+5. Turn off the slicer's own supports for the object, and give the support parts 0% infill, 1 perimeter and no top
+   or bottom solid layers.
 6. Slice. In the layer preview, confirm:
    - each pillar's top layer stops below the arm with a visible gap;
    - the pillar tips print as solid features and are not dropped as too thin;
-   - the bases print as separate pads and do not merge with the post.
+   - the bases print as separate pads and do not merge with the post;
+   - the support parts print with the hollow settings, not the model's.
 7. Record which of these held, with screenshots if possible.
 
 ## Support-removal calibration print

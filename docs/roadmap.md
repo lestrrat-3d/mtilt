@@ -37,7 +37,11 @@ cover the occluded case that fails today.
 
 ## 7. Tree supports and support optimization
 
-Branching supports that share trunks. This needs milestones 5 and 6 first.
+Branching supports rooted on the build plate only, never on the model, that share trunks and route around the model
+to reach overhangs with no straight drop to the plate. Straight pillars stay where a straight drop is open. Trunks
+wider than about 4 extrusion widths get a bore, so the slicer prints them hollow with no per-part settings; thin
+branches stay solid. This waits on decad: a tree has to become one body, which needs chained unions of curved
+bodies, a tapered tube along a polyline, or a body from a closed mesh (`../decad/.tmp/mtilt-handoff/README.md`).
 
 ## Out of scope until requested
 

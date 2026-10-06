@@ -93,7 +93,11 @@ mtilt has not been tested with any slicer. To keep the parts where mtilt put the
    dropping each file on the plate by itself. How to do that differs between slicers.
 2. Check that the pillars sit under the overhangs, with a visible gap between each pillar's top and the part.
 3. Turn off the slicer's own support generation for this object.
-4. Inspect the sliced preview layer by layer: the top gap, the pillar tips and the bases.
+4. Print the support parts hollow. mtilt writes every support as a solid body, and the slicer decides what fills it.
+   Give the support parts their own settings: 0% infill, 1 perimeter, and no top or bottom solid layers. Today's
+   pillars are 2 mm across, so with a 0.45 mm extrusion width they print nearly solid from their perimeters anyway;
+   the settings matter for the 3 mm bases and for wider supports.
+5. Inspect the sliced preview layer by layer: the top gap, the pillar tips and the bases.
 
 [docs/validation.md](docs/validation.md) has the full procedure, including a small calibration print.
 
