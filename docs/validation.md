@@ -9,13 +9,13 @@ actually performed.
 
 | Area | Where | What a test asserts |
 |---|---|---|
-| Mesh checks | `internal/mesh/validate_test.go` | each check fails on a mesh built to break it; exact-only vertex merging; volume, area, centroid and inertia of known shapes; rigid motion keeps them and inverts exactly |
+| Mesh checks | `internal/mesh/validate_test.go` | each check fails on a mesh built to break it; exact-only vertex merging; volume, area, centroid, inertia and cross-section area of known shapes; rigid motion keeps them and inverts exactly |
 | Overhang classes | `internal/overhang` | ceiling 0 degrees, wall 90 degrees, threshold on downward faces only, plate contact and plate-anchor height |
 | Long axis | `internal/orient` | sorted principal axes of known boxes; a cube has no long axis; rotated tensors give rotated axes; `FuzzPrincipal` checks A v = lambda v on arbitrary tensors |
-| Orientation | `internal/orient` | 24 distinct proper axis rotations; face-down rotations map the face normal to -Z; lay-flat and tilted long-axis candidates have the stated elevation; candidate limit; placement; real bed-contact area; ranking tie-breaks; strength term values |
+| Orientation | `internal/orient` | support-cost estimate of known shapes (column volume, contact, too-low area) and its independence from the frame; the search keeps finalists within the tilt limit, sorted and at least 1 degree apart, turns the oblique cuboid's face down, and does not depend on triangle order; placement; real bed-contact area; ranking tie-breaks |
 | Supports | `internal/support` | pillar bodies are decad solids with the analytic volume and closed tessellations; bracket and bridge demand fully covered; clearance zones and coverage re-checked; bases apart; occluded, too-low and narrow-slot demand reported with reasons; triangle order and retriangulation do not change pillars; limits; cancellation |
 | Assembly checks | `internal/support` | a pillar pushed into the model, a pillar inside the gap, overlapping pillars, a floating pillar and an open pillar mesh each fail their check |
-| Pipeline | `prepare_test.go` | cube needs no supports; oblique cuboid turns onto its 800 mm² face; fixed bracket and bridge get pillar bodies that pass decad's interference and validity checks; occluded part fails and adds no bodies; a standing stick, rod and nail are laid down, and the nail stands when the strength weight is 0; tilt candidates exist; input errors; build volume; limits; determinism; transform matrix and inverse; Analyze adds no bodies |
+| Pipeline | `prepare_test.go` | cube needs no supports; oblique cuboid turns onto its 800 mm² face; fixed bracket and bridge get pillar bodies that pass decad's interference and validity checks; occluded part fails and adds no bodies; a standing stick and rod are laid down; the nail is tilted under the 15 degree limit to its cheapest planned supports and stands when the limit is off; every finalist meets the tilt limit and the first-layer floor; input errors; build volume; limits; determinism; transform matrix and inverse; Analyze adds no bodies |
 | Profile | `options_test.go` | the example profile is valid and uncalibrated; missing and unknown fields and each broken rule are refused |
 | Examples | `examples/` | printed output matches |
 

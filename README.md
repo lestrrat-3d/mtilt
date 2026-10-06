@@ -18,13 +18,12 @@ them into a slicer.
   solid or has more than one lump.
 - Tessellates the body with decad (chord tolerance 0.01 mm by default) and plans on that mesh. The planning adds
   decad's proven tessellation bound to every gap and clearance it checks.
-- Evaluates candidate orientations: the given one, the 24 axis-aligned rotations, up to 12 rotations that put a
-  large flat face down, and, for a long part, rotations that lay its long axis flat, plus versions tilted 5, 10, 20
-  and 30 degrees.
-- Ranks them by a weighted score of support demand, build height, bed contact and layer strength. The strength
-  term penalizes a long part whose long axis points up, because FDM parts are weakest across layer lines: a stick
-  standing up puts every layer line across its length.
-- Plans supports for the best-ranked candidates in turn until one gets a complete plan. Each pillar is a base
+- Puts strength first. FDM parts are weakest across layer lines, so for a part with a long axis, mtilt never picks
+  an orientation that tilts that axis more than 15 degrees (`MaxLongAxisTiltDeg`) from the plate.
+- Searches inside that limit for the orientation with the least support. It estimates support volume and contact
+  area for about 2,000 directions spread over the sphere plus every large flat face put down, refines the 8 best,
+  plans real supports for each, and keeps the one whose planned pillars cost least. A direction must also leave at
+  least `min_first_layer_area_mm2` on the first layer, so the part does not balance on an edge. Each pillar is a base
   disc, a shaft and a tip that narrows to a small contact, and stops `top_contact_gap_mm` below the surface it
   holds.
 - For the selected candidate only, adds the moved model (`PlacedCopy`; the input stays live) and one revolved
@@ -50,13 +49,13 @@ The executable examples are the usage documentation; `go test ./examples/` runs 
   keeps it upright so its arm needs 41 pillars, and writes the model and every pillar as STL with
   `decad/export`.
 - [`examples/mtilt_strength_example_test.go`](examples/mtilt_strength_example_test.go) gives mtilt a round rod
-  standing on its end and shows it laid down.
+  standing on its end and shows it laid down, because standing breaks the tilt limit.
 
 `mtilt.Prepare` returns a `Result` with the moved model, the support bodies, the rigid transform, and a `Report`
 that encodes to JSON. The report records the input's readings, the transform and its inverse, the effective
 profile, every candidate's metrics, score terms and support outcome, the selected candidate, each support's
 position, every validation check, the properties mtilt did not check, warnings, and whether a search limit was
-reached. `mtilt.Analyze` runs the same ranking without building supports or adding bodies.
+reached. `mtilt.Analyze` runs the same search without planning supports or adding bodies.
 
 ## Importing into a slicer
 

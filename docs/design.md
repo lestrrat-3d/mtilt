@@ -8,7 +8,7 @@ what it leaves for later. The code is the authority where the two disagree; fix 
 | What inputs are accepted? | 1, 4 |
 | Which way is up, and how is the model moved? | 2 |
 | Where do epsilons come from? | 3 |
-| How is an orientation chosen? | 5 |
+| How is an orientation chosen? Why is strength first? | 5 |
 | What counts as an overhang? | 6 |
 | How are supports planned, built and checked? | 7 |
 | What does Prepare add to the document? | 8 |
@@ -36,8 +36,8 @@ planned in decad), G-code, printer control, a GUI, network services, GPU work, m
 supports, supports rooted on the model, soluble or resin supports, bridge detection, load or layer-adhesion
 simulation, slicer profiles. [roadmap.md](roadmap.md) orders them.
 
-"Best" in mtilt always means best among the evaluated candidates under the objective in section 5.4 and the
-given profile. mtilt does not claim a global optimum or printability.
+"Best" in mtilt always means best among the evaluated orientations under the rules in section 5 and the given
+profile. mtilt does not claim a global optimum or printability.
 
 ## 2. Coordinates and the transform
 
@@ -86,82 +86,95 @@ The tessellation checks are reported with a `tessellation_` prefix. `self_inters
 
 ## 5. Orientation
 
-Generation (`internal/orient/candidates.go`), the long axis (`principal.go`), measurement (`measure.go`) and
-ranking (`rank.go`) are separate, so a different search strategy can replace generation alone.
+**Strength comes first, then minimal support.** For a part with a long axis, no orientation that tilts the long
+axis more than `MaxLongAxisTiltDeg` (default 15 degrees) from the plate is chosen, however little support it
+needs. Inside that limit mtilt looks for the orientation with the least support.
+
+An orientation is described, for support, by its **down direction** d: the input-frame unit vector that ends up
+facing the plate. Turning the part about the vertical axis afterwards changes no overhang and no support, so the
+search runs over directions on the sphere. Each direction's rotation is the minimal one that turns d to -Z.
+
+The long axis (`internal/orient/principal.go`), the estimate and the search (`search.go`, `candidates.go`),
+measurement (`measure.go`) and ranking (`rank.go`) are separate.
 
 ### 5.1 The long axis
 
 The inertia tensor of the tessellated solid (unit density, about its centroid; `Mesh.Inertia`) is diagonalized by
 Jacobi rotations. Its principal axes, sorted by ascending moment, give the **long axis** (smallest moment) and the
 **elongation** `1 - I1 / I2`: 0 for a cube, a sphere or a square plate, and about 0.99 for an 8 x 8 x 100 mm stick.
-mtilt computes the tensor from the mesh rather than with `decad.Body.MassProperties` because decad computes mass
-properties for only some kinds of body.
+The tilt limit applies when the elongation is at least 0.1. The long axis's **elevation** in direction d is
+`asin(|a . d|)` for long axis a: 0 lying flat, 90 standing up.
 
-### 5.2 Candidates
+The limit encodes one rule of FDM printing: a part is weakest across its layer lines, so a slender part standing
+up breaks between layers under a bending load. mtilt runs no load or layer-adhesion analysis; the report lists
+`layer_strength` as unchecked.
 
-In this order, with later duplicates (every basis component equal within 1e-9) dropped:
+### 5.2 Support cost
 
-1. The given orientation.
-2. The 24 proper rotations whose basis vectors are signed coordinate axes.
-3. Up to `max_planar_faces` (default 12) "face down" rotations. Triangle normals are grouped into clusters: a
-   triangle joins the first cluster whose seed normal is within 1 degree of its own, or seeds a new one.
-   Triangles are visited by decreasing area, ties broken by normal components, so the result does not depend on
-   triangle order. Clusters are ranked by total area. Each yields the minimal rotation that turns its seed normal
-   to -Z. At most 1024 clusters are tracked.
-4. When the elongation is at least 0.1: the four rotations that lay the long axis along +X, rolled 0, 90, 180
-   and 270 degrees about it; then each of those tilted about Y by 5, 10, 20 and 30 degrees, positive then
-   negative, so the long axis rises that far from the plate.
+Support cost has two parts, each made dimensionless before they are added:
 
-The list is cut to `max_candidates` (default 128); the report records whether that happened.
-`KeepOrientation` evaluates only the given orientation.
+```
+cost = w_volume * support_volume / (surface_area * size) + w_contact * support_contact / surface_area
+```
 
-### 5.3 Placement
+`surface_area` is the mesh's surface area and `size` twice the largest distance from its centroid to a vertex;
+both are the same for every orientation. Default weights are 1 and 1 (`CostWeights`). Lower is better.
+
+The **estimate** (`Estimator.Estimate`) takes one pass over the triangles. For direction d, a triangle needs
+support when it faces down at an overhang angle below the threshold (`n . d > cos(threshold)`) and is neither on
+the plate nor entirely within the plate-anchor height. Each such triangle adds its projected area `A (n . d)` to
+the contact estimate, and that area times its mean height above the plate to the volume estimate: the column under
+it down to the plate. A triangle with any vertex lower than the shortest pillar can reach (`MinHeight + gap`, plus
+the tessellation bound) adds to `too_low_mm2`; no pillar fits there. The column ignores anything of the model
+between the triangle and the plate, so occluded demand is found only by planning.
+
+The **planned cost** is measured on the pillars the planner places: their summed analytic volume and their summed
+round contact areas, priced with the same formula.
+
+### 5.3 First layer
+
+The **first-layer area** of direction d is the model's cross-section one layer height above its lowest point
+(`Mesh.SectionArea`): what the first layer prints, and so what holds the part to the plate. A direction under the
+profile's `min_first_layer_area_mm2` (example: 20 mm²) is not allowed. Without this floor, a stick balanced on an
+edge, with every face at exactly 45 degrees, needs no support and wins while touching the plate along a line.
+
+### 5.4 Search
+
+1. **Seeds:** the given orientation (d = -Z), the six coordinate directions, and the normals of the
+   `max_planar_faces` (default 12) largest planar face clusters, so a flat face can sit exactly on the plate.
+   Clusters group triangle normals within 1 degree of a seed normal, visiting triangles by decreasing area (ties by
+   normal components), and rank by total area. At most 1024 clusters are tracked.
+2. **Sweep:** `sweep_directions` (default 2000) directions spread evenly over the sphere (a Fibonacci lattice),
+   about 4.5 degrees apart.
+3. **Filter and rank:** a seed or sweep direction is kept when it is within the tilt limit, meets the first-layer
+   floor, and has no `too_low_mm2`. Kept directions are ranked by estimated cost (rounded to 1e-9), then by lower
+   elevation; the best `max_support_attempts` (default 8) that are at least 1 degree apart become finalists.
+4. **Refine:** each finalist tries 8 directions around it at the sweep spacing; it moves to the best one that
+   passes the same filter and is strictly cheaper, and the step halves whenever none is, down to 0.25 degrees. A
+   refined finalist is never worse than where it started.
+5. **Plan:** every finalist gets a support plan (section 7). Among the plans that succeed, the lowest planned cost
+   wins; ties go to the larger first-layer area, then the lower height, then the lower elevation, then the lower ID.
+
+The result is the best orientation found at this resolution, not a proven global optimum. The report lists the
+given orientation and every finalist with its estimate, planned cost, metrics and outcome. `KeepOrientation`
+skips the search and plans only the given orientation; the tilt limit does not apply to it.
+
+### 5.5 Placement and metrics
 
 Each rotated mesh is translated by `t = (-(minX + maxX) / 2, -(minY + maxY) / 2, -minZ)` from its rotated bounding
-box, so its lowest point is at Z = 0 and its bounding box is centered on the Z axis.
-
-### 5.4 Metrics and objective
-
-Per placed candidate, in mm, mm² and degrees:
+box. Per candidate, in mm, mm² and degrees:
 
 | Metric | Definition |
 |---|---|
 | `height_mm` | maximum Z |
 | `bounding_footprint_mm` | X and Y extent of the bounding box (informational only) |
+| `first_layer_area_mm2` | cross-section at Z = layer height |
 | `support_demand_area_mm2` | surface area of triangles classed as demand (section 6) |
 | `support_demand_projected_area_mm2` | the same triangles' area projected onto the plate |
-| `anchored_area_mm2` | area of overhang triangles within the plate-anchor height (section 6) |
+| `anchored_area_mm2` | area of overhang triangles within the plate-anchor height |
 | `bed_contact_area_mm2` | area of downward triangles whose three vertices lie within `Plate` of Z = 0 |
 | `centroid_over_contact_hull`, `contact_hull_margin_mm` | whether the centroid's XY projection lies in the convex hull of the bed-contact vertices, and its distance to the nearest hull edge line; `null` when those vertices span no area |
-| `long_axis_elevation_deg` | angle between the rotated long axis and the plate: 0 lying flat, 90 standing up |
-
-```
-score = w_demand   * projected_demand_area / surface_area
-      + w_height   * height / size
-      - w_contact  * bed_contact_area / surface_area
-      + w_strength * elongation * sin^2(long_axis_elevation)
-```
-
-`surface_area` is the mesh's surface area, `size` twice the largest distance from its centroid to a vertex, and
-`elongation` the model's (5.1). All are the same for every orientation, so each term is dimensionless and no two
-units are added. Lower is better. Default weights are 1, 0.1, 0.5 and 0.5.
-
-The strength term encodes one rule of FDM printing: a part is weakest across its layer lines, so a slender part
-standing up breaks between layers under a bending load. The term grows with the square of the elevation's sine,
-so a small tilt costs little (5 degrees costs under 1% of standing up) and can win when it saves support. It is a
-geometric heuristic: mtilt runs no load or layer-adhesion analysis, and the report lists `layer_strength` as
-unchecked.
-
-### 5.5 Ranking and search
-
-Candidates are sorted by: fits the build volume (or fit unchecked) before exceeds; then score rounded to 1e-9;
-then candidate ID.
-
-`Prepare` walks the ranking. A candidate whose model alone exceeds the build volume is skipped. Each of the first
-`max_support_attempts` (default 8) remaining candidates gets a support plan (section 7). The first plan that
-covers all demand, passes the plan checks and fits the build volume with its supports is selected; a candidate
-with no demand needs no supports. If none succeeds, `Prepare` returns `ErrNoFeasibleCandidate` with the report
-and adds nothing to the document.
+| `long_axis_elevation_deg` | the long axis's elevation |
 
 ## 6. Overhang convention
 
@@ -302,15 +315,16 @@ The report holds no timing. Two runs with the same body, options and build give 
 | Limit | Default | Exceeded |
 |---|---|---|
 | `max_triangles` | 2,000,000 | `ErrLimit` |
-| `max_candidates` | 128 | list cut, `candidate_limit_reached` |
-| `max_planar_faces` | 12 | fewer face-down candidates |
-| `max_support_attempts` | 8 | search stops, `support_attempt_limit_reached` |
+| `sweep_directions` | 2,000 | the sweep's resolution |
+| `max_planar_faces` | 12 | fewer face-down seeds |
+| `max_support_attempts` | 8 | the number of finalists planned |
 | `max_supports` | 5,000 | attempt fails |
 | `max_samples` | 500,000 | attempt fails |
 
 Every long loop checks its `context.Context`. decad's `Verify` time grows with the number of bodies in the
 document. As a dated measurement (2026-10-06, 24-core machine), `Prepare` took about 4 s for the bracket's 41
-pillars and 8 s for the nail fixture's 75, while planning on the mesh alone took milliseconds.
+pillars, and about 5 s for the nail fixture, which plans 8 finalists and builds 49 pillars; the estimate sweep
+itself took milliseconds.
 
 ## 10. Package layout
 
@@ -322,7 +336,7 @@ pillars and 8 s for the nail fixture's 75, while planning on the mesh alone took
 | `doc.go` | package documentation |
 | `internal/mesh/` | `Mesh`, `FromBody` (decad tessellation), measurements, inertia, `Tolerance`, `Validate` |
 | `internal/overhang/` | overhang angle and triangle classes |
-| `internal/orient/` | long axis, candidate generation, placement, metrics, scoring, ranking |
+| `internal/orient/` | long axis, support-cost estimate, direction search, placement, metrics, ranking |
 | `internal/support/` | XY index, separating-axis tests, pillar geometry and bodies, planning, plan and mesh checks |
 | `internal/fixture/` | test shapes as triangle soups and as decad bodies |
 | `profiles/example-fdm.json` | illustrative, uncalibrated profile |

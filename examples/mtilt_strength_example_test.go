@@ -32,8 +32,9 @@ func Example_mtilt_strength() {
 		return
 	}
 
-	// FDM parts are weakest across layer lines, so mtilt scores a long part
-	// standing up as weak and lays it down.
+	// FDM parts are weakest across layer lines, so mtilt keeps a long
+	// part's long axis within 15 degrees of the plate (the default limit)
+	// and looks for the least support inside that limit.
 	res, err := mtilt.Prepare(ctx, rod, mtilt.Options{Profile: mtilt.ExampleProfile()})
 	if err != nil {
 		fmt.Printf("failed to prepare: %s\n", err)
@@ -42,11 +43,11 @@ func Example_mtilt_strength() {
 	given := res.Report.Candidates[0]
 	best := res.Report.Candidates[*res.Report.Selected]
 	fmt.Printf("elongation: %.2f\n", res.Report.Input.Elongation)
-	fmt.Printf("as given: long axis at %.0f degrees, strength term %.2f\n", given.Metrics.LongAxisElevationDeg, given.Terms.Strength)
+	fmt.Printf("as given: long axis at %.0f degrees, allowed: %v\n", given.Metrics.LongAxisElevationDeg, given.TiltAllowed)
 	fmt.Printf("selected: long axis at %.0f degrees, height %.1f mm, %d supports\n",
 		best.Metrics.LongAxisElevationDeg, best.Metrics.HeightMM, len(res.Supports))
 	// Output:
 	// elongation: 0.99
-	// as given: long axis at 90 degrees, strength term 0.50
+	// as given: long axis at 90 degrees, allowed: false
 	// selected: long axis at 0 degrees, height 8.0 mm, 0 supports
 }

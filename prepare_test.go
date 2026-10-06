@@ -113,7 +113,9 @@ func TestPrepare(t *testing.T) {
 		require.Zero(t, sel.Metrics.SupportDemandAreaMM2)
 		require.InDelta(t, 800, sel.Metrics.BedContactAreaMM2, 1e-6)
 		require.InDelta(t, 10, sel.Metrics.HeightMM, 1e-6)
-		require.Greater(t, res.Report.Candidates[0].Score, sel.Score)
+		// As given, the cuboid's long axis rises over the default limit.
+		require.False(t, res.Report.Candidates[0].TiltAllowed)
+		require.LessOrEqual(t, sel.Metrics.LongAxisElevationDeg, float64(mtilt.DefaultMaxLongAxisTiltDeg))
 		requireMovedCopy(t, body, res.Model, res.Transform)
 
 		b, err := res.Model.Bounds()
@@ -196,8 +198,10 @@ func TestPrepareStrength(t *testing.T) {
 		require.NoError(t, err)
 		require.Greater(t, res.Report.Input.Elongation, 0.95)
 		require.InDelta(t, 90, res.Report.Candidates[0].Metrics.LongAxisElevationDeg, 1e-6)
+		require.False(t, res.Report.Candidates[0].TiltAllowed)
 		require.InDelta(t, 0, selected(res).Metrics.LongAxisElevationDeg, 1e-6)
 		require.InDelta(t, 8, selected(res).Metrics.HeightMM, 1e-6)
+		require.Empty(t, res.Supports)
 	})
 
 	t.Run("a standing rod is laid down; its underside is plate-anchored", func(t *testing.T) {
@@ -211,55 +215,40 @@ func TestPrepareStrength(t *testing.T) {
 		require.Positive(t, res.Report.Input.TessellationBoundMM)
 	})
 
-	nail := func(t *testing.T, w mtilt.Weights) *mtilt.Result {
-		t.Helper()
-		res, err := prepare(t, newBody(t, (*fixture.Bodies).Nail), mtilt.Options{Weights: w})
+	t.Run("a nail on its flange is laid down, tilted to save supports", func(t *testing.T) {
+		res, err := prepare(t, newBody(t, (*fixture.Bodies).Nail), mtilt.Options{})
 		require.NoError(t, err)
-		return res
-	}
-
-	t.Run("a nail on its flange is laid down, supported, by the strength term", func(t *testing.T) {
-		res := nail(t, mtilt.Weights{})
-		sel := selected(res)
-		require.LessOrEqual(t, sel.Metrics.LongAxisElevationDeg, 30.0)
-		require.NotEmpty(t, res.Supports)
 		requireNoFailedCheck(t, res.Report)
-		standing := res.Report.Candidates[0]
-		require.InDelta(t, 90, standing.Metrics.LongAxisElevationDeg, 1e-6)
-		require.Positive(t, standing.Terms.Strength)
-		require.Greater(t, standing.Score, sel.Score)
+		sel := selected(res)
+		require.Greater(t, sel.Metrics.LongAxisElevationDeg, 1.0)
+		require.LessOrEqual(t, sel.Metrics.LongAxisElevationDeg, float64(mtilt.DefaultMaxLongAxisTiltDeg))
+		require.NotEmpty(t, res.Supports)
+		require.True(t, res.Report.Search.Constrained)
+		for _, c := range res.Report.Candidates {
+			if c.Planned != nil && c.ID != sel.ID {
+				require.GreaterOrEqual(t, c.Planned.Score, sel.Planned.Score-1e-9, "candidate %d", c.ID)
+			}
+		}
 	})
 
-	t.Run("without the strength term the nail stands", func(t *testing.T) {
-		w := mtilt.DefaultWeights()
-		w.Strength = 0
-		res := nail(t, w)
+	t.Run("without the tilt limit the nail stands on its flange", func(t *testing.T) {
+		res, err := prepare(t, newBody(t, (*fixture.Bodies).Nail), mtilt.Options{MaxLongAxisTiltDeg: 90})
+		require.NoError(t, err)
+		require.False(t, res.Report.Search.Constrained)
 		require.InDelta(t, 90, selected(res).Metrics.LongAxisElevationDeg, 1e-6)
 		require.Empty(t, res.Supports)
 	})
 
-	t.Run("long-axis candidates include tilts", func(t *testing.T) {
-		a, err := mtilt.Analyze(t.Context(), newBody(t, (*fixture.Bodies).Nail), mtilt.Options{Profile: mtilt.ExampleProfile()})
+	t.Run("every finalist respects the tilt limit", func(t *testing.T) {
+		a, err := mtilt.Analyze(t.Context(), newBody(t, (*fixture.Bodies).Nail), mtilt.Options{Profile: mtilt.ExampleProfile(), MaxLongAxisTiltDeg: 10})
 		require.NoError(t, err)
-		var tilts []float64
-		for _, c := range a.Report.Candidates {
-			if c.Source == "long_axis_tilted" {
-				require.NotNil(t, c.TiltDeg)
-				require.InDelta(t, abs(*c.TiltDeg), c.Metrics.LongAxisElevationDeg, 1e-6)
-				tilts = append(tilts, *c.TiltDeg)
-			}
-		}
-		for _, want := range []float64{5, -5, 10, -10, 20, -20, 30, -30} {
-			require.Contains(t, tilts, want)
+		for _, c := range a.Report.Candidates[1:] {
+			require.True(t, c.TiltAllowed)
+			require.LessOrEqual(t, c.Metrics.LongAxisElevationDeg, 10+1e-9)
+			require.GreaterOrEqual(t, c.Metrics.FirstLayerAreaMM2, mtilt.ExampleProfile().MinFirstLayerAreaMM2)
+			require.Zero(t, c.Estimate.TooLowMM2)
 		}
 	})
-}
-
-func abs(v float64) float64 {
-	if v < 0 {
-		return -v
-	}
-	return v
 }
 
 func TestPrepareInputErrors(t *testing.T) {
@@ -287,9 +276,22 @@ func TestPrepareInputErrors(t *testing.T) {
 		require.ErrorIs(t, err, mtilt.ErrInvalidOptions)
 	})
 
-	t.Run("negative weight", func(t *testing.T) {
-		_, err := prepare(t, newBody(t, (*fixture.Bodies).Cube), mtilt.Options{Weights: mtilt.Weights{Strength: -1}})
+	t.Run("negative cost weight", func(t *testing.T) {
+		_, err := prepare(t, newBody(t, (*fixture.Bodies).Cube), mtilt.Options{CostWeights: mtilt.CostWeights{Volume: -1}})
 		require.ErrorIs(t, err, mtilt.ErrInvalidOptions)
+	})
+
+	t.Run("tilt limit out of range", func(t *testing.T) {
+		_, err := prepare(t, newBody(t, (*fixture.Bodies).Cube), mtilt.Options{MaxLongAxisTiltDeg: 91})
+		require.ErrorIs(t, err, mtilt.ErrInvalidOptions)
+	})
+
+	t.Run("first-layer floor nothing meets", func(t *testing.T) {
+		p := mtilt.ExampleProfile()
+		p.MinFirstLayerAreaMM2 = 1000
+		_, err := prepare(t, newBody(t, (*fixture.Bodies).Cube), mtilt.Options{Profile: p})
+		fe := requireFailure(t, err, mtilt.ErrNoFeasibleCandidate)
+		require.Contains(t, fe.Report.Candidates[0].Attempt.Reason, "first layer area")
 	})
 
 	t.Run("triangle limit", func(t *testing.T) {

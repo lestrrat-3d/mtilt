@@ -4,8 +4,9 @@ Guidance for agents working in this repository. Read before structural changes. 
 
 ## What this is
 
-**mtilt** (mesh-tilt): Go library. Takes a solid `*decad.Body`, picks an FDM print orientation (support demand,
-height, bed contact, layer strength), plans bed-rooted pillar supports on decad's tessellation, builds the moved
+**mtilt** (mesh-tilt): Go library. Takes a solid `*decad.Body`, picks an FDM print orientation (strength first:
+long axis within a tilt limit; then least support, found by a sphere sweep + refinement + real planning), plans
+bed-rooted pillar supports on decad's tessellation, builds the moved
 model + one revolved pillar body per support in the body's decad document, verifies them with decad. Pure Go, CPU
 only. No file I/O; examples export with `decad/export`.
 
@@ -64,7 +65,9 @@ Local `golangci-lint` version MUST match CI's before trusting a clean local run.
 - **Determinism:** no map iteration into output order, no `time.Now` or randomness in the library, no timing in
   the report. Sort with explicit tie-breaks.
 - **Bounded work:** every loop over triangles, samples or candidates checks `ctx` and respects `Limits`.
-- **Keep generation, long axis, measurement, ranking and feasibility separate** (`internal/orient/` files).
+- **Strength outranks support.** NEVER let a support saving pick an orientation over `MaxLongAxisTiltDeg`. Change
+  the limit, never trade it in a weighted sum.
+- **Keep long axis, estimate/search, measurement and ranking separate** (`internal/orient/` files).
 - **NEVER add a no-op option, placeholder support, fake score or stub package.** Unbuilt features go in
   `docs/roadmap.md`.
 - **NEVER add a `go.mod` dependency without recording it in `docs/design.md` section 11.** Approved:
