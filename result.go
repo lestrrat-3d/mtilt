@@ -131,43 +131,53 @@ type ToleranceReport struct {
 
 // ObjectiveReport records how candidates were scored and ordered.
 type ObjectiveReport struct {
-	Weights  Weights      `json:"weights"`
-	Scale    orient.Scale `json:"normalization"`
-	Formula  string       `json:"formula"`
-	TieBreak string       `json:"tie_break"`
-	Quantum  float64      `json:"score_quantum"`
+	// MaxLongAxisTiltDeg is the tilt limit; TiltLimited says whether it
+	// applied (the body has a long axis and the limit is under 90).
+	MaxLongAxisTiltDeg float64      `json:"max_long_axis_tilt_deg"`
+	TiltLimited        bool         `json:"tilt_limited"`
+	CostWeights        CostWeights  `json:"cost_weights"`
+	Scale              orient.Scale `json:"normalization"`
+	Formula            string       `json:"formula"`
+	Selection          string       `json:"selection"`
+	Quantum            float64      `json:"score_quantum"`
 }
 
 // SearchReport records how much of the search ran and whether a limit cut
 // it short.
 type SearchReport struct {
-	CandidatesDistinct    int  `json:"candidates_distinct"`
-	CandidatesEvaluated   int  `json:"candidates_evaluated"`
-	CandidateLimitReached bool `json:"candidate_limit_reached"`
-	SupportAttempts       int  `json:"support_attempts"`
-	// AttemptLimitReached is true when the attempt limit stopped the
-	// search before every feasible candidate was tried and none had
-	// succeeded.
+	orient.SearchStats
+	// Finalists counts the orientations reported as candidates.
+	Finalists       int `json:"finalists"`
+	SupportAttempts int `json:"support_attempts"`
+	// AttemptLimitReached is true when the attempt limit left a feasible
+	// finalist unplanned.
 	AttemptLimitReached bool `json:"support_attempt_limit_reached"`
 }
 
-// CandidateReport is one evaluated orientation.
+// CandidateReport is one orientation: the original one or a search
+// finalist.
 type CandidateReport struct {
 	ID     int    `json:"id"`
 	Source string `json:"source"`
-	// Rank is the 1-based position in the ranking.
+	// Rank is the 1-based position by estimated support cost.
 	Rank int `json:"rank"`
+	// Down is the input-frame direction that faces the plate.
+	Down [3]float64 `json:"down"`
 	// Rotation is the 3x3 rotation, row-major, applied before placement.
 	Rotation    [3][3]float64  `json:"rotation"`
 	FaceNormal  *[3]float64    `json:"face_normal,omitempty"`
 	FaceAreaMM2 *float64       `json:"face_area_mm2,omitempty"`
-	TiltDeg     *float64       `json:"tilt_deg,omitempty"`
 	Metrics     orient.Metrics `json:"metrics"`
+	// TiltAllowed is false when the long axis rises above the tilt limit.
+	TiltAllowed bool `json:"tilt_allowed"`
 	// Fit is "fits", "exceeds" or "unchecked" (no build volume).
-	Fit     string        `json:"build_volume_fit"`
-	Terms   orient.Terms  `json:"score_terms"`
-	Score   float64       `json:"score"`
-	Attempt AttemptReport `json:"support_attempt"`
+	Fit string `json:"build_volume_fit"`
+	// Estimate is the one-pass support cost estimate (see
+	// docs/design.md); Planned is the cost of the planned pillars, set
+	// only when supports were planned.
+	Estimate orient.Cost   `json:"estimated_support_cost"`
+	Planned  *orient.Cost  `json:"planned_support_cost,omitempty"`
+	Attempt  AttemptReport `json:"support_attempt"`
 }
 
 // Attempt statuses.

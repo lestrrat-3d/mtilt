@@ -29,6 +29,7 @@ type session struct {
 	pr     orient.Principal
 	report *Report
 
+	scale  orient.Scale
 	cands  []orient.Candidate
 	placed []*mesh.Mesh
 	full   []r3.Transform
@@ -153,39 +154,51 @@ func prefixChecks(prefix string, checks []mesh.Check) []mesh.Check {
 	return out
 }
 
-// evaluate generates, places, measures and ranks the candidates. It returns
-// candidate IDs in rank order.
+// evaluate searches for orientations, then places and measures each
+// candidate. It returns candidate IDs in rank order: allowed and fitting
+// first, then by estimated support cost.
 func (s *session) evaluate(ctx context.Context) ([]int, error) {
-	if s.opts.KeepOrientation {
-		s.cands = []orient.Candidate{{ID: 0, Source: orient.SourceOriginal, Rotation: r3.Identity()}}
-		s.report.Search.CandidatesDistinct = 1
-	} else {
-		cands, gen, err := orient.Generate(ctx, s.model, orient.Limits{
-			MaxCandidates:  s.opts.Limits.MaxCandidates,
-			MaxPlanarFaces: s.opts.Limits.MaxPlanarFaces,
-		}, &s.pr)
-		if err != nil {
-			return nil, err
-		}
-		s.cands = cands
-		s.report.Search.CandidatesDistinct = gen.Distinct
-		s.report.Search.CandidateLimitReached = gen.Truncated
-	}
-	s.report.Search.CandidatesEvaluated = len(s.cands)
-
 	centroid := s.model.Centroid()
 	var reach float64
 	for _, v := range s.model.Vertices {
 		reach = math.Max(reach, v.Sub(centroid).Len())
 	}
 	scale := orient.Scale{SurfaceAreaMM2: s.model.SurfaceArea(), SizeMM: 2 * reach, Elongation: s.pr.Elongation}
+	s.scale = scale
+	est := orient.NewEstimator(s.model, s.opts.Profile.OverhangThreshold, s.opts.Profile.PlateAnchorMM,
+		s.opts.Profile.LayerHeightMM, s.planningParams().MinReachMM(), s.tol, s.opts.CostWeights, scale)
+
+	if s.opts.KeepOrientation {
+		d := r3.NewVec(0, 0, -1)
+		s.cands = []orient.Candidate{{
+			ID: 0, Source: orient.SourceOriginal, Down: d, Rotation: r3.Identity(), Allowed: true,
+			ElevationDeg: orient.LongAxisElevation(s.pr, r3.Identity()), Estimate: est.Estimate(d),
+		}}
+	} else {
+		cands, stats, err := orient.Search(ctx, s.model, s.pr, est, orient.SearchOptions{
+			Directions:       s.opts.Limits.SweepDirections,
+			MaxPlanarFaces:   s.opts.Limits.MaxPlanarFaces,
+			Finalists:        s.opts.Limits.MaxSupportAttempts,
+			MaxTiltDeg:       s.opts.MaxLongAxisTiltDeg,
+			MinFirstLayerMM2: s.opts.Profile.MinFirstLayerAreaMM2,
+		})
+		if err != nil {
+			return nil, err
+		}
+		s.cands = cands
+		s.report.Search.SearchStats = stats
+	}
+	s.report.Search.Finalists = len(s.cands)
 	s.report.Objective = ObjectiveReport{
-		Weights: s.opts.Weights,
-		Scale:   scale,
-		Formula: "score = support_demand*projected_demand_area/surface_area + height*height/size" +
-			" - bed_contact*bed_contact_area/surface_area + strength*elongation*sin^2(long_axis_elevation); lower is better",
-		TieBreak: "feasible before infeasible, then score rounded to score_quantum, then lower candidate id",
-		Quantum:  orient.ScoreQuantum,
+		MaxLongAxisTiltDeg: s.opts.MaxLongAxisTiltDeg,
+		TiltLimited:        s.report.Search.Constrained,
+		CostWeights:        s.opts.CostWeights,
+		Scale:              scale,
+		Formula: "cost = volume*support_volume/(surface_area*size) + contact*support_contact/surface_area;" +
+			" the estimate uses the column under each overhang, the planned cost the built pillars",
+		Selection: "only orientations within the long-axis tilt limit and the build volume, with at least the minimum first-layer area; " +
+			"among planned ones the lowest planned cost, then the larger first-layer area, the lower height, the lower long-axis elevation, the lower id",
+		Quantum: orient.ScoreQuantum,
 	}
 
 	entries := make([]orient.Entry, len(s.cands))
@@ -200,31 +213,26 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 			return nil, fmt.Errorf("mtilt: placing candidate %d: %w", c.ID, err)
 		}
 		s.placed[i], s.full[i] = placed, full
-		met := orient.Measure(placed, s.opts.Profile.OverhangThreshold, s.opts.Profile.PlateAnchorMM, s.tol)
-		met.LongAxisElevationDeg = orient.LongAxisElevation(s.pr, c.Rotation)
-		terms, score := orient.Score(met, s.opts.Weights, scale)
+		met := orient.Measure(placed, s.opts.Profile.OverhangThreshold, s.opts.Profile.PlateAnchorMM, s.opts.Profile.LayerHeightMM, s.tol)
+		met.LongAxisElevationDeg = c.ElevationDeg
 		fit := s.fit(placed.Bounds())
 		cr := CandidateReport{
-			ID:       c.ID,
-			Source:   string(c.Source),
-			Rotation: rotationRows(c.Rotation),
-			Metrics:  met,
-			Fit:      fit,
-			Terms:    terms,
-			Score:    score,
-			Attempt:  AttemptReport{Status: AttemptNotAttempted},
+			ID:          c.ID,
+			Source:      string(c.Source),
+			Down:        vec3(c.Down),
+			Rotation:    rotationRows(c.Rotation),
+			Metrics:     met,
+			TiltAllowed: c.Allowed,
+			Fit:         fit,
+			Estimate:    c.Estimate,
+			Attempt:     AttemptReport{Status: AttemptNotAttempted},
 		}
-		switch c.Source {
-		case orient.SourcePlanarFace:
+		if c.Source == orient.SourcePlanarFace {
 			n, a := vec3(c.FaceNormal), c.FaceAreaMM2
 			cr.FaceNormal, cr.FaceAreaMM2 = &n, &a
-		case orient.SourceTiltedLong:
-			tilt := c.TiltDeg
-			cr.TiltDeg = &tilt
-		case orient.SourceOriginal, orient.SourceAxisAligned, orient.SourceLongAxis:
 		}
 		s.report.Candidates = append(s.report.Candidates, cr)
-		entries[i] = orient.Entry{ID: c.ID, Feasible: fit != fitExceeds, Score: score}
+		entries[i] = s.entry(&cr, c.Estimate.Score)
 	}
 	order := orient.Rank(entries)
 	for rank, id := range order {
@@ -315,20 +323,23 @@ func Prepare(ctx context.Context, body *decad.Body, opts Options) (*Result, erro
 
 	params := s.planningParams()
 	lim := support.Limits{MaxSupports: s.opts.Limits.MaxSupports, MaxSamples: s.opts.Limits.MaxSamples}
-	for i, id := range order {
+	best := -1
+	var bestPlan *support.Plan
+	for _, id := range order {
 		cr := &s.report.Candidates[id]
-		if cr.Fit == fitExceeds {
+		switch {
+		case !cr.TiltAllowed:
+			cr.Attempt.Reason = fmt.Sprintf("the long axis rises %.1f degrees, over the %.1f degree limit", cr.Metrics.LongAxisElevationDeg, s.opts.MaxLongAxisTiltDeg)
+			continue
+		case cr.Fit == fitExceeds:
 			cr.Attempt.Reason = "the model alone exceeds the build volume"
 			continue
-		}
-		if s.report.Search.SupportAttempts == s.opts.Limits.MaxSupportAttempts {
-			for _, rest := range order[i:] {
-				if s.report.Candidates[rest].Fit != fitExceeds {
-					s.report.Search.AttemptLimitReached = true
-					break
-				}
-			}
-			break
+		case !s.firstLayerOK(cr):
+			cr.Attempt.Reason = fmt.Sprintf("first layer area %.1f mm2 is under the profile's %.1f mm2 minimum", cr.Metrics.FirstLayerAreaMM2, s.opts.Profile.MinFirstLayerAreaMM2)
+			continue
+		case s.report.Search.SupportAttempts == s.opts.Limits.MaxSupportAttempts:
+			s.report.Search.AttemptLimitReached = true
+			continue
 		}
 		s.report.Search.SupportAttempts++
 		plan, err := s.attempt(ctx, id, params, lim)
@@ -338,10 +349,50 @@ func Prepare(ctx context.Context, body *decad.Body, opts Options) (*Result, erro
 		case err != nil:
 			return nil, err
 		}
-		return s.build(ctx, id, plan)
+		cost := s.plannedCost(plan)
+		cr.Planned = &cost
+		cr.Attempt.Status = AttemptSucceeded
+		if len(plan.Pillars) == 0 {
+			cr.Attempt.Status = AttemptNotNeeded
+		}
+		if best < 0 || orient.Less(s.entry(cr, cr.Planned.Score), s.entry(&s.report.Candidates[best], s.report.Candidates[best].Planned.Score)) {
+			best, bestPlan = id, plan
+		}
 	}
-	return nil, s.fail(fmt.Errorf("%w: %d of %d candidates attempted, none succeeded",
-		ErrNoFeasibleCandidate, s.report.Search.SupportAttempts, len(s.cands)))
+	if best < 0 {
+		return nil, s.fail(fmt.Errorf("%w: %d of %d candidates planned, none succeeded",
+			ErrNoFeasibleCandidate, s.report.Search.SupportAttempts, len(s.cands)))
+	}
+	return s.build(ctx, best, bestPlan)
+}
+
+// entry describes a candidate for ranking with the given cost score. A
+// candidate is feasible when it is within the tilt limit, fits the build
+// volume, and has at least the profile's minimum first-layer area.
+func (s *session) entry(cr *CandidateReport, score float64) orient.Entry {
+	return orient.Entry{
+		ID:                cr.ID,
+		Feasible:          cr.TiltAllowed && cr.Fit != fitExceeds && s.firstLayerOK(cr),
+		Score:             score,
+		FirstLayerAreaMM2: cr.Metrics.FirstLayerAreaMM2,
+		HeightMM:          cr.Metrics.HeightMM,
+		ElevationDeg:      cr.Metrics.LongAxisElevationDeg,
+	}
+}
+
+func (s *session) firstLayerOK(cr *CandidateReport) bool {
+	return cr.Metrics.FirstLayerAreaMM2 >= s.opts.Profile.MinFirstLayerAreaMM2
+}
+
+// plannedCost returns the cost of a plan's pillars: their total volume and
+// total contact area, priced like the estimate.
+func (s *session) plannedCost(plan *support.Plan) orient.Cost {
+	p := s.opts.Profile.supportParams()
+	var vol float64
+	for _, pl := range plan.Pillars {
+		vol += p.Volume(pl)
+	}
+	return orient.NewCost(vol, float64(len(plan.Pillars))*p.ContactArea(), s.opts.CostWeights, s.scale)
 }
 
 // errAttemptFailed is returned by attempt when a candidate's supports fail;

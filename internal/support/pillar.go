@@ -22,6 +22,7 @@ package support
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/lestrrat-3d/decad"
 	"github.com/lestrrat-3d/r3"
@@ -46,6 +47,10 @@ type Params struct {
 
 // MinHeight is the shortest pillar these params can build: base plus tip.
 func (p Params) MinHeight() float64 { return p.BaseThicknessMM + p.TipHeightMM }
+
+// MinReachMM is the lowest surface height a pillar fits under: the shortest
+// pillar plus the top gap.
+func (p Params) MinReachMM() float64 { return p.MinHeight() + p.TopGapMM }
 
 // minShaftMM is the shortest shaft section a pillar gets. A shaft that would
 // be shorter is left out and the tip starts on the base, so a pillar near
@@ -164,4 +169,27 @@ func (p Params) clearanceZones(pl Pillar) []convex {
 		zones = append(zones, frustum(pl.X, pl.Y, p.BaseThicknessMM, shaft+sc, tip, shaft+sc))
 	}
 	return append(zones, sweptUp(frustum(pl.X, pl.Y, tip, shaft, pl.TopZ, contact), p.TopGapMM))
+}
+
+// Volume returns the volume in mm^3 of the round pillar Body builds for pl:
+// the sum, over consecutive levels at different heights, of the cone
+// frustum pi h (r1^2 + r1 r2 + r2^2) / 3.
+func (p Params) Volume(pl Pillar) float64 {
+	lv := p.levels(pl)
+	var v float64
+	for i := 1; i < len(lv); i++ {
+		h := lv[i].z - lv[i-1].z
+		if h <= 0 {
+			continue
+		}
+		r1, r2 := lv[i-1].half, lv[i].half
+		v += math.Pi * h * (r1*r1 + r1*r2 + r2*r2) / 3
+	}
+	return v
+}
+
+// ContactArea returns the area in mm^2 of a pillar's round top face.
+func (p Params) ContactArea() float64 {
+	r := p.ContactWidthMM / 2
+	return math.Pi * r * r
 }

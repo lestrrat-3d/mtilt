@@ -56,6 +56,11 @@ type Profile struct {
 	// needs no support. 0 supports everything above the plate.
 	PlateAnchorMM float64 `json:"plate_anchor_height_mm"`
 
+	// MinFirstLayerAreaMM2 is the smallest first-layer area (the model's
+	// cross-section at the layer height) an orientation may have: less
+	// than this holds too little of the part to the plate.
+	MinFirstLayerAreaMM2 float64 `json:"min_first_layer_area_mm2"`
+
 	// BuildVolume is optional. Without it, fit is reported as unchecked.
 	BuildVolume *BuildVolume `json:"build_volume,omitempty"`
 }
@@ -107,14 +112,14 @@ var profileKeys = []string{
 	"name", "calibrated", "nozzle_diameter_mm", "extrusion_width_mm", "layer_height_mm",
 	"min_feature_mm", "overhang_threshold_deg", "support_spacing_mm", "top_contact_gap_mm",
 	"side_clearance_mm", "contact_width_mm", "pillar_width_mm", "tip_height_mm",
-	"base_width_mm", "base_thickness_mm", "plate_anchor_height_mm",
+	"base_width_mm", "base_thickness_mm", "plate_anchor_height_mm", "min_first_layer_area_mm2",
 }
 
 // Validate checks the profile's values and their combinations. It returns
 // ErrInvalidOptions naming the first rule that fails:
 //
-//   - every length is finite and positive, except side_clearance_mm and
-//     plate_anchor_height_mm, which may be 0;
+//   - every length is finite and positive, except side_clearance_mm,
+//     plate_anchor_height_mm and min_first_layer_area_mm2, which may be 0;
 //   - overhang_threshold_deg is in (0, 90);
 //   - layer_height_mm < nozzle_diameter_mm <= extrusion_width_mm <=
 //     min_feature_mm <= contact_width_mm <= pillar_width_mm <= base_width_mm;
@@ -147,6 +152,9 @@ func (p Profile) Validate() error {
 	}
 	if !(p.PlateAnchorMM >= 0) || math.IsInf(p.PlateAnchorMM, 0) {
 		return fail("plate_anchor_height_mm must be finite and not negative, got %v", p.PlateAnchorMM)
+	}
+	if !(p.MinFirstLayerAreaMM2 >= 0) || math.IsInf(p.MinFirstLayerAreaMM2, 0) {
+		return fail("min_first_layer_area_mm2 must be finite and not negative, got %v", p.MinFirstLayerAreaMM2)
 	}
 	if !(p.OverhangThreshold > 0 && p.OverhangThreshold < 90) {
 		return fail("overhang_threshold_deg must be between 0 and 90, got %v", p.OverhangThreshold)
@@ -204,14 +212,19 @@ func (p Profile) supportParams() support.Params {
 	}
 }
 
-// Weights are the orientation objective's term weights. See Objective.
-type Weights = orient.Weights
+// CostWeights weight support volume against support contact area in the
+// support cost (see Report.Objective).
+type CostWeights = orient.CostWeights
 
-// DefaultWeights returns the weights Options uses when none are set:
-// support demand 1, height 0.1, bed contact 0.5, strength 0.5.
-func DefaultWeights() Weights {
-	return Weights{SupportDemand: 1, Height: 0.1, BedContact: 0.5, Strength: 0.5}
+// DefaultCostWeights returns the weights Options uses when both are zero:
+// volume 1, contact 1.
+func DefaultCostWeights() CostWeights {
+	return CostWeights{Volume: 1, Contact: 1}
 }
+
+// DefaultMaxLongAxisTiltDeg is the long-axis tilt limit Options uses when
+// MaxLongAxisTiltDeg is 0.
+const DefaultMaxLongAxisTiltDeg = 15
 
 // Limits bound the work Prepare and Analyze do. A zero field means the
 // default listed beside it.
@@ -219,12 +232,13 @@ type Limits struct {
 	// MaxTriangles caps the tessellation of the input body. Default
 	// 2,000,000.
 	MaxTriangles int `json:"max_triangles"`
-	// MaxCandidates caps the orientations evaluated. Default 128.
-	MaxCandidates int `json:"max_candidates"`
-	// MaxPlanarFaces caps the planar-face candidates. Default 12.
+	// SweepDirections is the number of evenly spread down directions the
+	// search estimates. Default 2,000.
+	SweepDirections int `json:"sweep_directions"`
+	// MaxPlanarFaces caps the face-down seed directions. Default 12.
 	MaxPlanarFaces int `json:"max_planar_faces"`
-	// MaxSupportAttempts caps how many ranked candidates get a support
-	// attempt. Default 8.
+	// MaxSupportAttempts is the number of finalist orientations that get a
+	// support plan. Default 8.
 	MaxSupportAttempts int `json:"max_support_attempts"`
 	// MaxSupports caps the pillars in one attempt. Default 5,000.
 	MaxSupports int `json:"max_supports"`
@@ -240,7 +254,7 @@ func (l Limits) withDefaults() Limits {
 		}
 	}
 	def(&l.MaxTriangles, 2_000_000)
-	def(&l.MaxCandidates, 128)
+	def(&l.SweepDirections, 2_000)
 	def(&l.MaxPlanarFaces, 12)
 	def(&l.MaxSupportAttempts, 8)
 	def(&l.MaxSupports, 5_000)
@@ -256,14 +270,22 @@ const DefaultChordToleranceMM = 0.01
 type Options struct {
 	// Profile is required.
 	Profile Profile
-	// Weights default to DefaultWeights when all four are zero.
-	Weights Weights
+	// MaxLongAxisTiltDeg is the largest angle, in degrees, between a long
+	// part's long axis and the build plate. Strength comes first: no
+	// orientation over the limit is chosen, however little support it
+	// needs. It applies only to parts with a long axis (elongation at
+	// least 0.1). 0 means DefaultMaxLongAxisTiltDeg; 90 turns the limit
+	// off.
+	MaxLongAxisTiltDeg float64
+	// CostWeights default to DefaultCostWeights when both are zero.
+	CostWeights CostWeights
 	// ChordToleranceMM is the chord tolerance the body is tessellated with
 	// for planning. Default DefaultChordToleranceMM. The bound decad proves
 	// for the tessellation is added to every clearance mtilt checks on it.
 	ChordToleranceMM float64
 	// KeepOrientation evaluates only the input orientation. The model is
 	// still translated onto the plate, and the translation is reported.
+	// The tilt limit does not apply.
 	KeepOrientation bool
 	Limits          Limits
 }
@@ -272,13 +294,19 @@ func (o Options) normalized() (Options, error) {
 	if err := o.Profile.Validate(); err != nil {
 		return Options{}, err
 	}
-	if o.Weights == (Weights{}) {
-		o.Weights = DefaultWeights()
+	if o.CostWeights == (CostWeights{}) {
+		o.CostWeights = DefaultCostWeights()
 	}
-	for _, w := range []float64{o.Weights.SupportDemand, o.Weights.Height, o.Weights.BedContact, o.Weights.Strength} {
+	for _, w := range []float64{o.CostWeights.Volume, o.CostWeights.Contact} {
 		if !(w >= 0) || math.IsInf(w, 0) {
-			return Options{}, fmt.Errorf("%w: weights must be finite and not negative", ErrInvalidOptions)
+			return Options{}, fmt.Errorf("%w: cost weights must be finite and not negative", ErrInvalidOptions)
 		}
+	}
+	if o.MaxLongAxisTiltDeg == 0 {
+		o.MaxLongAxisTiltDeg = DefaultMaxLongAxisTiltDeg
+	}
+	if !(o.MaxLongAxisTiltDeg > 0 && o.MaxLongAxisTiltDeg <= 90) {
+		return Options{}, fmt.Errorf("%w: long-axis tilt limit must be in (0, 90] degrees", ErrInvalidOptions)
 	}
 	if o.ChordToleranceMM == 0 {
 		o.ChordToleranceMM = DefaultChordToleranceMM

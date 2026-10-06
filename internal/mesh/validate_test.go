@@ -154,6 +154,30 @@ func TestInertia(t *testing.T) {
 	require.InDelta(t, 0, in.YZ, 1e-6)
 }
 
+func TestSliceArea(t *testing.T) {
+	cube := build(t, fixture.Cube())
+	require.InDelta(t, 400, cube.SliceArea(0.2), 1e-9)
+	require.InDelta(t, 400, cube.SliceArea(19.9), 1e-9)
+	require.Zero(t, cube.SliceArea(25))
+
+	// The bracket's section below the arm is the post alone; through the
+	// arm it is the full 40 x 20.
+	bracket := build(t, fixture.Bracket())
+	require.InDelta(t, 200, bracket.SliceArea(10), 1e-9)
+	require.InDelta(t, 800, bracket.SliceArea(35), 1e-9)
+
+	// A cube standing on an edge: the section at height h is 2h wide.
+	rot, err := r3.FromBasis(r3.Basis{
+		EX: r3.NewVec(1, 0, 0),
+		EY: r3.NewVec(0, math.Sqrt2/2, math.Sqrt2/2),
+		EZ: r3.NewVec(0, -math.Sqrt2/2, math.Sqrt2/2),
+	}, r3.Vec{})
+	require.NoError(t, err)
+	edge := cube.Transformed(rot)
+	minZ := edge.Bounds().Min.Z
+	require.InDelta(t, 20*2*0.4, edge.SliceArea(minZ+0.4), 1e-9)
+}
+
 func TestTransformed(t *testing.T) {
 	m := build(t, fixture.ObliqueCuboid())
 	rot, err := r3.FromBasis(r3.Basis{EX: r3.NewVec(0, 1, 0), EY: r3.NewVec(0, 0, 1), EZ: r3.NewVec(1, 0, 0)}, r3.NewVec(3, -4, 5))

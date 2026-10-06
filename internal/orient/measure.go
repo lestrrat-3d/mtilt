@@ -58,6 +58,10 @@ type Metrics struct {
 	// SupportDemandProjectedAreaMM2 is the same triangles' area projected
 	// onto the build plate.
 	SupportDemandProjectedAreaMM2 float64 `json:"support_demand_projected_area_mm2"`
+	// FirstLayerAreaMM2 is the area of the model's cross-section at the
+	// top of the first layer (Z = layer height): what the first layer
+	// prints, and so what holds the part to the plate.
+	FirstLayerAreaMM2 float64 `json:"first_layer_area_mm2"`
 	// AnchoredAreaMM2 is the area of overhang triangles within the
 	// plate-anchor height (overhang.Anchored); they need no support.
 	AnchoredAreaMM2 float64 `json:"anchored_area_mm2"`
@@ -88,13 +92,14 @@ func LongAxisElevation(pr Principal, rot r3.Transform) float64 {
 }
 
 // Measure computes the metrics of a placed model. thresholdDeg is the
-// overhang threshold, anchorMM the plate-anchor height, and tol the model's
-// numeric tolerances.
-func Measure(placed *mesh.Mesh, thresholdDeg, anchorMM float64, tol mesh.Tolerance) Metrics {
+// overhang threshold, anchorMM the plate-anchor height, layerMM the layer
+// height, and tol the model's numeric tolerances.
+func Measure(placed *mesh.Mesh, thresholdDeg, anchorMM, layerMM float64, tol mesh.Tolerance) Metrics {
 	b := placed.Bounds()
 	met := Metrics{
-		HeightMM:    b.Max.Z,
-		FootprintMM: [2]float64{b.Max.X - b.Min.X, b.Max.Y - b.Min.Y},
+		HeightMM:          b.Max.Z,
+		FootprintMM:       [2]float64{b.Max.X - b.Min.X, b.Max.Y - b.Min.Y},
+		FirstLayerAreaMM2: placed.SliceArea(layerMM),
 	}
 	var contact []r3.Vec
 	for i := range placed.Triangles {

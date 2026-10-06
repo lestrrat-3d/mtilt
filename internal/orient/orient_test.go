@@ -13,106 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var limits = orient.Limits{MaxCandidates: 64, MaxPlanarFaces: 12}
-
 func build(t *testing.T, soup [][3]r3.Vec) *mesh.Mesh {
 	t.Helper()
 	m, err := mesh.FromSoup(soup)
 	require.NoError(t, err)
 	return m
-}
-
-func TestGenerate(t *testing.T) {
-	t.Run("axis-aligned set is the 24 proper rotations", func(t *testing.T) {
-		cands, gen, err := orient.Generate(t.Context(), build(t, fixture.Cube()), limits, nil)
-		require.NoError(t, err)
-		// Every planar face of a cube is axis-aligned, so its face-down
-		// rotation duplicates an axis-aligned one and is dropped.
-		require.Len(t, cands, 24)
-		require.Equal(t, 24, gen.Distinct)
-		require.False(t, gen.Truncated)
-		require.Equal(t, orient.SourceOriginal, cands[0].Source)
-		for i, c := range cands {
-			require.Equal(t, i, c.ID)
-			require.False(t, c.Rotation.IsReflection())
-			for _, prev := range cands[:i] {
-				require.False(t, prev.Rotation.Equal(c.Rotation, 1e-9), "candidate %d repeats", i)
-			}
-		}
-	})
-
-	t.Run("planar candidates turn dominant faces down, largest first", func(t *testing.T) {
-		m := build(t, fixture.ObliqueCuboid())
-		cands, _, err := orient.Generate(t.Context(), m, limits, nil)
-		require.NoError(t, err)
-		var planar []orient.Candidate
-		for _, c := range cands {
-			if c.Source == orient.SourcePlanarFace {
-				planar = append(planar, c)
-			}
-		}
-		require.Len(t, planar, 6)
-		down := r3.NewVec(0, 0, -1)
-		for i, c := range planar {
-			require.True(t, c.Rotation.ApplyDir(c.FaceNormal).Equal(down, 1e-9))
-			if i > 0 {
-				require.GreaterOrEqual(t, planar[i-1].FaceAreaMM2, c.FaceAreaMM2)
-			}
-		}
-		require.InDelta(t, 800, planar[0].FaceAreaMM2, 1e-3)
-	})
-
-	t.Run("candidate limit truncates and reports it", func(t *testing.T) {
-		cands, gen, err := orient.Generate(t.Context(), build(t, fixture.ObliqueCuboid()), orient.Limits{MaxCandidates: 5, MaxPlanarFaces: 12}, nil)
-		require.NoError(t, err)
-		require.Len(t, cands, 5)
-		require.True(t, gen.Truncated)
-		// Original, 23 more axis-aligned rotations, 6 face-down ones.
-		require.Equal(t, 30, gen.Distinct)
-	})
-
-	t.Run("triangle order does not change candidates", func(t *testing.T) {
-		soup := fixture.ObliqueCuboid()
-		a, _, err := orient.Generate(t.Context(), build(t, soup), limits, nil)
-		require.NoError(t, err)
-		rng := rand.New(rand.NewPCG(1, 2))
-		rng.Shuffle(len(soup), func(i, j int) { soup[i], soup[j] = soup[j], soup[i] })
-		b, _, err := orient.Generate(t.Context(), build(t, soup), limits, nil)
-		require.NoError(t, err)
-		require.Len(t, b, len(a))
-		for i := range a {
-			require.True(t, a[i].Rotation.Equal(b[i].Rotation, 1e-12))
-		}
-	})
-
-	t.Run("cancelled", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		cancel()
-		_, _, err := orient.Generate(ctx, build(t, fixture.Cube()), limits, nil)
-		require.ErrorIs(t, err, context.Canceled)
-	})
-}
-
-func TestPlace(t *testing.T) {
-	m := build(t, fixture.ObliqueCuboid())
-	cands, _, err := orient.Generate(t.Context(), m, limits, nil)
-	require.NoError(t, err)
-	for _, c := range cands {
-		placed, full, err := orient.Place(m, c.Rotation)
-		require.NoError(t, err)
-		b := placed.Bounds()
-		require.Zero(t, b.Min.Z)
-		require.InDelta(t, 0, b.Min.X+b.Max.X, 1e-9)
-		require.InDelta(t, 0, b.Min.Y+b.Max.Y, 1e-9)
-		require.False(t, full.IsReflection())
-		require.InDelta(t, m.Volume(), placed.Volume(), 1e-6)
-
-		inv, err := full.Inverse()
-		require.NoError(t, err)
-		for i, v := range placed.Vertices {
-			require.True(t, inv.Apply(v).Equal(m.Vertices[i], 1e-9))
-		}
-	}
 }
 
 func TestMeasure(t *testing.T) {
@@ -121,7 +26,7 @@ func TestMeasure(t *testing.T) {
 	t.Run("cube on the plate", func(t *testing.T) {
 		placed, _, err := orient.Place(build(t, fixture.Cube()), r3.Identity())
 		require.NoError(t, err)
-		met := orient.Measure(placed, 45, 0, tol)
+		met := orient.Measure(placed, 45, 0, 0.2, tol)
 		require.InDelta(t, 20, met.HeightMM, 1e-12)
 		require.InDelta(t, 400, met.BedContactAreaMM2, 1e-9)
 		require.Zero(t, met.SupportDemandAreaMM2)
@@ -133,7 +38,7 @@ func TestMeasure(t *testing.T) {
 	t.Run("bracket arm underside is demand; contact is the post only", func(t *testing.T) {
 		placed, _, err := orient.Place(build(t, fixture.Bracket()), r3.Identity())
 		require.NoError(t, err)
-		met := orient.Measure(placed, 45, 0, tol)
+		met := orient.Measure(placed, 45, 0, 0.2, tol)
 		require.InDelta(t, 600, met.SupportDemandAreaMM2, 1e-9)
 		require.InDelta(t, 600, met.SupportDemandProjectedAreaMM2, 1e-9)
 		// The bounding box covers 40 x 20 mm; the post touches 10 x 20.
@@ -146,32 +51,11 @@ func TestMeasure(t *testing.T) {
 	t.Run("oblique cuboid touches the plate at a vertex", func(t *testing.T) {
 		placed, _, err := orient.Place(build(t, fixture.ObliqueCuboid()), r3.Identity())
 		require.NoError(t, err)
-		met := orient.Measure(placed, 45, 0, tol)
+		met := orient.Measure(placed, 45, 0, 0.2, tol)
 		require.Zero(t, met.BedContactAreaMM2)
 		require.Nil(t, met.CentroidOverContact, "no contact polygon")
 		require.Greater(t, met.SupportDemandAreaMM2, 0.0)
 	})
-}
-
-func TestRank(t *testing.T) {
-	order := orient.Rank([]orient.Entry{
-		{ID: 0, Feasible: true, Score: 0.5},
-		{ID: 1, Feasible: false, Score: -10},
-		{ID: 2, Feasible: true, Score: 0.1},
-		{ID: 3, Feasible: true, Score: 0.1 + 1e-12}, // ties with 2 after rounding
-		{ID: 4, Feasible: true, Score: 0.1 - 1e-6},
-	})
-	require.Equal(t, []int{4, 2, 3, 0, 1}, order)
-}
-
-func TestScore(t *testing.T) {
-	met := orient.Metrics{HeightMM: 10, SupportDemandProjectedAreaMM2: 50, BedContactAreaMM2: 25}
-	terms, score := orient.Score(met, orient.Weights{SupportDemand: 2, Height: 1, BedContact: 4}, orient.Scale{SurfaceAreaMM2: 100, SizeMM: 20})
-	require.InDelta(t, 1.0, terms.SupportDemand, 1e-12)
-	require.InDelta(t, 0.5, terms.Height, 1e-12)
-	require.InDelta(t, -1.0, terms.BedContact, 1e-12)
-	require.InDelta(t, 0.5, score, 1e-12)
-	require.False(t, math.IsNaN(score))
 }
 
 func TestPrincipal(t *testing.T) {
@@ -205,48 +89,6 @@ func TestPrincipal(t *testing.T) {
 	})
 }
 
-func TestLongAxisCandidates(t *testing.T) {
-	m := build(t, fixture.Box(r3.NewVec(0, 0, 0), r3.NewVec(8, 8, 100)))
-	pr := orient.NewPrincipal(m.Inertia())
-	cands, _, err := orient.Generate(t.Context(), m, orient.Limits{MaxCandidates: 256, MaxPlanarFaces: 12}, &pr)
-	require.NoError(t, err)
-	var flat, tilted int
-	for _, c := range cands {
-		elev := orient.LongAxisElevation(pr, c.Rotation)
-		require.False(t, c.Rotation.IsReflection())
-		switch c.Source {
-		case orient.SourceLongAxis:
-			flat++
-			require.InDelta(t, 0, elev, 1e-9)
-		case orient.SourceTiltedLong:
-			tilted++
-			require.InDelta(t, math.Abs(c.TiltDeg), elev, 1e-9)
-		}
-	}
-	// The stick's lay-flat poses are all axis-aligned, so only tilted ones
-	// are new: four rolls, four angles, two directions.
-	require.Zero(t, flat)
-	require.Equal(t, 4*len(orient.TiltsDeg)*2, tilted)
-
-	t.Run("no long axis, no long-axis candidates", func(t *testing.T) {
-		m := build(t, fixture.Cube())
-		pr := orient.NewPrincipal(m.Inertia())
-		cands, _, err := orient.Generate(t.Context(), m, limits, &pr)
-		require.NoError(t, err)
-		require.Len(t, cands, 24)
-	})
-}
-
-func TestStrengthTerm(t *testing.T) {
-	s := orient.Scale{SurfaceAreaMM2: 100, SizeMM: 20, Elongation: 0.8}
-	w := orient.Weights{Strength: 2}
-	for _, tc := range []struct{ elev, want float64 }{{0, 0}, {30, 2 * 0.8 * 0.25}, {90, 2 * 0.8}} {
-		terms, score := orient.Score(orient.Metrics{LongAxisElevationDeg: tc.elev}, w, s)
-		require.InDelta(t, tc.want, terms.Strength, 1e-12, "elevation %g", tc.elev)
-		require.InDelta(t, tc.want, score, 1e-12)
-	}
-}
-
 func FuzzPrincipal(f *testing.F) {
 	f.Add(1.0, 2.0, 3.0, 0.1, 0.2, 0.3)
 	f.Add(5.0, 5.0, 5.0, 0.0, 0.0, 0.0)
@@ -268,4 +110,153 @@ func FuzzPrincipal(f *testing.F) {
 		require.LessOrEqual(t, pr.Moments[0], pr.Moments[1])
 		require.LessOrEqual(t, pr.Moments[1], pr.Moments[2])
 	})
+}
+
+var searchOpts = orient.SearchOptions{Directions: 500, MaxPlanarFaces: 12, Finalists: 6, MaxTiltDeg: 15, MinFirstLayerMM2: 20}
+
+func estimator(m *mesh.Mesh) *orient.Estimator {
+	tol := mesh.Tolerance{Length: 1e-9, Serialization: 1e-6, Plate: 4e-6}
+	return orient.NewEstimator(m, 45, 0, 0.2, 2.8, tol, orient.CostWeights{Volume: 1, Contact: 1}, orient.Scale{SurfaceAreaMM2: 1, SizeMM: 1})
+}
+
+func TestEstimator(t *testing.T) {
+	down := r3.NewVec(0, 0, -1)
+
+	t.Run("cube on its face needs nothing", func(t *testing.T) {
+		e := estimator(build(t, fixture.Cube()))
+		c := e.Estimate(down)
+		require.Zero(t, c.VolumeMM3)
+		require.Zero(t, c.ContactMM2)
+		require.InDelta(t, 400, e.FirstLayer(down), 1e-9)
+	})
+
+	t.Run("bracket arm: the column under 600 mm2 at 30 mm", func(t *testing.T) {
+		e := estimator(build(t, fixture.Bracket()))
+		c := e.Estimate(down)
+		require.InDelta(t, 600, c.ContactMM2, 1e-9)
+		require.InDelta(t, 600*30, c.VolumeMM3, 1e-6)
+		require.Zero(t, c.TooLowMM2)
+		require.InDelta(t, 600*30+600, c.Score, 1e-6)
+		require.InDelta(t, 200, e.FirstLayer(down), 1e-9)
+	})
+
+	t.Run("an overhang under the shortest pillar is too low", func(t *testing.T) {
+		ledge := fixture.Prism([][2]float64{{0, 0}, {10, 0}, {10, 2}, {30, 2}, {30, 5}, {0, 5}}, 0, 20)
+		c := estimator(build(t, ledge)).Estimate(down)
+		require.InDelta(t, 400, c.TooLowMM2, 1e-9)
+	})
+
+	t.Run("the estimate does not depend on the frame", func(t *testing.T) {
+		m := build(t, fixture.Bracket())
+		rot, err := r3.FromBasis(r3.Basis{EX: r3.NewVec(0, 1, 0), EY: r3.NewVec(0, 0, 1), EZ: r3.NewVec(1, 0, 0)}, r3.NewVec(5, 6, 7))
+		require.NoError(t, err)
+		a := estimator(m).Estimate(down)
+		b := estimator(m.Transformed(rot)).Estimate(rot.ApplyDir(down))
+		require.InDelta(t, a.VolumeMM3, b.VolumeMM3, 1e-6)
+		require.InDelta(t, a.ContactMM2, b.ContactMM2, 1e-6)
+	})
+}
+
+func TestSearch(t *testing.T) {
+	t.Run("oblique cuboid: the best finalist puts a large face down", func(t *testing.T) {
+		m := build(t, fixture.ObliqueCuboid())
+		pr := orient.NewPrincipal(m.Inertia())
+		cands, stats, err := orient.Search(t.Context(), m, pr, estimator(m), searchOpts)
+		require.NoError(t, err)
+		require.True(t, stats.Constrained)
+		require.Equal(t, 500, stats.Swept)
+		require.Equal(t, orient.SourceOriginal, cands[0].Source)
+		require.False(t, cands[0].Allowed, "the given pose tilts the long axis 16 degrees")
+		best := cands[1]
+		require.Zero(t, best.Estimate.Score)
+		require.True(t, best.Rotation.ApplyDir(best.Down).Equal(r3.NewVec(0, 0, -1), 1e-9))
+		placed, _, err := orient.Place(m, best.Rotation)
+		require.NoError(t, err)
+		require.Greater(t, placed.SliceArea(0.2), 200.0)
+		for _, c := range cands[1:] {
+			require.True(t, c.Allowed)
+			require.LessOrEqual(t, c.ElevationDeg, 15+1e-9)
+		}
+	})
+
+	t.Run("cube: no long axis, no tilt limit", func(t *testing.T) {
+		m := build(t, fixture.Cube())
+		_, stats, err := orient.Search(t.Context(), m, orient.NewPrincipal(m.Inertia()), estimator(m), searchOpts)
+		require.NoError(t, err)
+		require.False(t, stats.Constrained)
+	})
+
+	t.Run("finalists are sorted, distinct, and refined ones are no worse", func(t *testing.T) {
+		m := build(t, fixture.Bracket())
+		cands, _, err := orient.Search(t.Context(), m, orient.NewPrincipal(m.Inertia()), estimator(m), searchOpts)
+		require.NoError(t, err)
+		fin := cands[1:]
+		require.LessOrEqual(t, len(fin), searchOpts.Finalists)
+		for i := range fin {
+			if i > 0 {
+				require.GreaterOrEqual(t, fin[i].Estimate.Score, fin[i-1].Estimate.Score-orient.ScoreQuantum)
+			}
+			for _, o := range fin[:i] {
+				require.Less(t, fin[i].Down.Dot(o.Down), math.Cos(math.Pi/180))
+			}
+		}
+	})
+
+	t.Run("triangle order does not change the result", func(t *testing.T) {
+		soup := fixture.ObliqueCuboid()
+		m := build(t, soup)
+		a, _, err := orient.Search(t.Context(), m, orient.NewPrincipal(m.Inertia()), estimator(m), searchOpts)
+		require.NoError(t, err)
+		rng := rand.New(rand.NewPCG(1, 2))
+		rng.Shuffle(len(soup), func(i, j int) { soup[i], soup[j] = soup[j], soup[i] })
+		m2 := build(t, soup)
+		b, _, err := orient.Search(t.Context(), m2, orient.NewPrincipal(m2.Inertia()), estimator(m2), searchOpts)
+		require.NoError(t, err)
+		require.Len(t, b, len(a))
+		for i := range a {
+			require.True(t, a[i].Down.Equal(b[i].Down, 1e-9), "candidate %d", i)
+		}
+	})
+
+	t.Run("cancelled", func(t *testing.T) {
+		m := build(t, fixture.Cube())
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		_, _, err := orient.Search(ctx, m, orient.NewPrincipal(m.Inertia()), estimator(m), searchOpts)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+}
+
+func TestPlace(t *testing.T) {
+	m := build(t, fixture.ObliqueCuboid())
+	cands, _, err := orient.Search(t.Context(), m, orient.NewPrincipal(m.Inertia()), estimator(m), searchOpts)
+	require.NoError(t, err)
+	for _, c := range cands {
+		placed, full, err := orient.Place(m, c.Rotation)
+		require.NoError(t, err)
+		b := placed.Bounds()
+		require.Zero(t, b.Min.Z)
+		require.InDelta(t, 0, b.Min.X+b.Max.X, 1e-9)
+		require.InDelta(t, 0, b.Min.Y+b.Max.Y, 1e-9)
+		require.False(t, full.IsReflection())
+		require.InDelta(t, m.Volume(), placed.Volume(), 1e-6)
+		inv, err := full.Inverse()
+		require.NoError(t, err)
+		for i, v := range placed.Vertices {
+			require.True(t, inv.Apply(v).Equal(m.Vertices[i], 1e-9))
+		}
+	}
+}
+
+func TestRank(t *testing.T) {
+	order := orient.Rank([]orient.Entry{
+		{ID: 0, Feasible: true, Score: 0.5},
+		{ID: 1, Feasible: false, Score: -10},
+		{ID: 2, Feasible: true, Score: 0.1, FirstLayerAreaMM2: 100},
+		{ID: 3, Feasible: true, Score: 0.1 + 1e-12, FirstLayerAreaMM2: 400}, // ties 2 on score, wins on first layer
+		{ID: 4, Feasible: true, Score: 0.1 - 1e-6},
+		{ID: 5, Feasible: true, Score: 0.1, FirstLayerAreaMM2: 400, HeightMM: 5}, // loses to 3 on height
+		{ID: 6, Feasible: true, Score: 0.1, FirstLayerAreaMM2: 400, ElevationDeg: 3},
+	})
+	require.Equal(t, []int{4, 3, 6, 5, 2, 0, 1}, order)
 }

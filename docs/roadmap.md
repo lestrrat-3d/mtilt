@@ -24,11 +24,11 @@ choosing between `support` and `model` object types.
 
 Detect downward spans anchored at both ends and treat short ones as printable bridges instead of support demand.
 
-## 5. Better candidate search
+## 5. Better orientation search
 
-Add yaw sampling for rectangular build volumes, finer tilts around the best long-axis candidates, and local
-refinement. Generation is separate from measurement and ranking, so this changes
-`internal/orient/candidates.go` only.
+Make the support estimate see occlusion (cast the column under each overhang against the model) so fewer
+finalists fail planning, and turn the part about the vertical axis to fit rectangular build volumes. Both change
+`internal/orient/search.go` only.
 
 ## 6. Removal accessibility
 

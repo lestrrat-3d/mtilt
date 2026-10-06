@@ -219,6 +219,58 @@ func (m *Mesh) Inertia() InertiaTensor {
 	return InertiaTensor{XX: tr - c[0][0], YY: tr - c[1][1], ZZ: tr - c[2][2], XY: -c[0][1], XZ: -c[0][2], YZ: -c[1][2]}
 }
 
+// SliceArea returns the area of the closed mesh's cross-section by the
+// horizontal plane Z = z.
+func (m *Mesh) SliceArea(z float64) float64 {
+	return m.SectionArea(r3.NewVec(0, 0, 1), z)
+}
+
+// SectionArea returns the area of the closed mesh's cross-section by the
+// plane of points p with p.up = offset, for unit vector up.
+//
+// Each triangle that crosses the plane contributes the segment where it cuts
+// it, oriented along up x n (n the triangle's outward normal), which runs
+// counter-clockwise around the section seen from the up side. The section's
+// area is then the shoelace sum over those segments in a frame of the plane.
+// A vertex exactly on the plane counts as above it, so no segment is counted
+// twice.
+func (m *Mesh) SectionArea(up r3.Vec, offset float64) float64 {
+	ref := r3.NewVec(1, 0, 0)
+	if math.Abs(up.X) > 0.9 {
+		ref = r3.NewVec(0, 1, 0)
+	}
+	u, _ := ref.Cross(up).Normalize()
+	v := up.Cross(u)
+	var area float64
+	for i := range m.Triangles {
+		t := m.Triangle(i)
+		var pts [2]r3.Vec
+		n := 0
+		for k := range 3 {
+			a, b := t[k], t[(k+1)%3]
+			ha, hb := a.Dot(up)-offset, b.Dot(up)-offset
+			if (ha < 0) == (hb < 0) {
+				continue
+			}
+			if n < 2 {
+				pts[n] = a.Add(b.Sub(a).Scale(ha / (ha - hb)))
+			}
+			n++
+		}
+		if n != 2 {
+			continue
+		}
+		normal := t[1].Sub(t[0]).Cross(t[2].Sub(t[0]))
+		p, q := pts[0], pts[1]
+		if q.Sub(p).Dot(up.Cross(normal)) < 0 {
+			p, q = q, p
+		}
+		pu, pv, qu, qv := p.Dot(u), p.Dot(v), q.Dot(u), q.Dot(v)
+		area += pu*qv - qu*pv
+	}
+	return area / 2
+}
+
 // TriangleArea returns the area of t.
 func TriangleArea(t [3]r3.Vec) float64 {
 	return t[1].Sub(t[0]).Cross(t[2].Sub(t[0])).Len() / 2
