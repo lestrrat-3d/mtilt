@@ -33,7 +33,7 @@ Implemented:
 
 Not implemented, and not stubbed: file input or output (decad's exporters write files; STL import into decad is
 planned in decad), G-code, printer control, a GUI, network services, GPU work, mesh repair, model splitting, tree
-supports, supports rooted on the model, soluble or resin supports, bridge detection, load or layer-adhesion
+supports, supports rooted on the model, soluble or resin supports, load or layer-adhesion
 simulation, slicer profiles. [roadmap.md](roadmap.md) orders them.
 
 "Best" in mtilt always means best among the evaluated orientations under the rules in section 5 and the given
@@ -192,8 +192,23 @@ follows PrusaSlicer's documented support threshold convention.
 Support sampling also drops demand samples at or below `plate_anchor_height_mm`. The anchor exists because the
 shortest pillar (base plus tip plus gap, 2.8 mm in the example profile) cannot fit under a surface just above the
 plate, such as the underside of a rod lying on its side, which the first layers print from the plate. The example
-profile's 1.2 mm is a modelling assumption, not a measured value. Bridges are not detected: a horizontal span
-between two walls is demand like any other ceiling.
+profile's 1.2 mm is a modelling assumption, not a measured value.
+
+### 6.1 Bridges and wall-held points
+
+A short span between two walls prints in the air without support. Support sampling (section 7.3) leaves a demand
+sample out when, in the model's cross-section one layer height below it (`Mesh` slice at `z - layer_height_mm`),
+along one of 8 horizontal lines through it spread over half a turn (`internal/support/bridge.go`):
+
+| Result | Condition |
+|---|---|
+| held | the cross-section passes within the length tolerance of the sample: it sits on top of a wall |
+| bridged | the surface is tilted at most `bridge_max_tilt_deg` from horizontal, and the cross-section lies on both sides of the sample with at most `max_bridge_mm` of air between them |
+
+`max_bridge_mm = 0` turns both off. The example profile uses 10 mm and 5 degrees; neither is a measured value. A
+cantilever (one wall) is never a bridge. The search's support estimate (section 5.2) does not apply this rule, so it
+overestimates support for parts with bridges; the planned cost does apply it. The report counts both kinds per
+candidate (`bridged_samples`, `wall_held_samples`).
 
 ## 7. Supports
 
@@ -228,7 +243,7 @@ round pillar.
 
 Demand is sampled at every point of a square grid of pitch `support_spacing_mm / 4`, anchored at the origin, that
 falls inside a demand triangle's XY projection (at that triangle's height), plus every demand triangle's vertices,
-leaving out samples at or below the anchor height.
+leaving out samples at or below the anchor height and samples that are bridged or wall-held (section 6.1).
 
 **Coverage rule:** a sample at (x, y, z) is covered by a pillar at (px, py) that holds a surface at height sz when
 
@@ -294,7 +309,8 @@ clearances come from the mesh checks above.
 
 - Removal: mtilt does not check that a support can be reached or broken away.
 - Physical behavior: no support has been printed, sliced or tested by mtilt.
-- Stability under print forces, layer strength under load, bridges, and self-intersection.
+- Stability under print forces, layer strength under load, whether a bridge prints cleanly at `max_bridge_mm`, and
+  self-intersection.
 
 The report lists these under `unchecked`.
 

@@ -21,7 +21,7 @@ procedure + log.
 | Any file | `docs/design.md` section 10 (package layout) |
 | Tessellation, tolerances, input checks | `docs/design.md` sections 3, 4 |
 | Orientation code (`internal/orient/`) | `docs/design.md` section 5 |
-| Overhang classification, plate anchor | `docs/design.md` section 6 |
+| Overhang classification, plate anchor, bridges | `docs/design.md` section 6 |
 | Support code (`internal/support/`) | `docs/design.md` section 7 |
 | Anything that adds bodies to a document | `docs/design.md` section 8 |
 | Limits | `docs/design.md` section 9 |
@@ -84,7 +84,8 @@ Local `golangci-lint` version MUST match CI's before trusting a clean local run.
   unchecked.
 - Supports: round pillars from the plate to demand surfaces reachable straight from below. Occluded, too-low or
   too-narrow demand → uncovered → candidate fails. Surfaces within `plate_anchor_height_mm` of the plate need no
-  support. Bridges are demand. Removal and layer strength unverified.
+  support. Spans up to `max_bridge_mm` between two walls, and points on top of a wall, need no support. Removal
+  and layer strength unverified.
 
 ## Conventions
 

@@ -49,6 +49,10 @@ type Plan struct {
 	DemandTriangles int
 	// Samples counts the demand sample points.
 	Samples int
+	// Bridged and Held count the sample points left out because they lie
+	// on a short bridge or on top of a wall (see builder.bridgeCheck).
+	Bridged int
+	Held    int
 	// Uncovered lists the samples no pillar covers, sorted by Y, X, Z.
 	// A plan with any uncovered sample must not be used.
 	Uncovered []Sample
@@ -76,7 +80,9 @@ const slackFactor = 4
 // it on a square grid of pitch SpacingMM/4 anchored at the origin (every
 // grid point inside a demand triangle's XY projection, at the triangle's
 // height there) plus every demand triangle's vertices, leaving out samples
-// at or below PlateAnchorMM.
+// at or below PlateAnchorMM and samples on a short bridge or on top of a wall
+// (see builder.bridgeCheck; counted in Plan.Bridged and Plan.Held). A sample shared by triangles is
+// judged with the tilt of the first triangle that produced it.
 //
 // Coverage rule: a sample (x, y, z) is covered by a pillar at (px, py) whose
 // held surface is at height sz when hypot(x-px, y-py) <= SpacingMM and
@@ -130,12 +136,16 @@ func Build(ctx context.Context, placed *mesh.Mesh, p Params, lim Limits, tol mes
 		return plan, nil
 	}
 
-	samples, err := b.samples(ctx)
+	samples, bridged, held, err := b.samples(ctx)
 	if err != nil {
 		return nil, err
 	}
 	plan.samples = samples
 	plan.Samples = len(samples)
+	plan.Bridged, plan.Held = bridged, held
+	if len(samples) == 0 {
+		return plan, nil
+	}
 
 	if err := b.edgePass(ctx, samples); err != nil {
 		return nil, err
@@ -207,10 +217,12 @@ func (b *builder) add(pl Pillar) error {
 	return nil
 }
 
-func (b *builder) samples(ctx context.Context) ([]r3.Vec, error) {
+func (b *builder) samples(ctx context.Context) ([]r3.Vec, int, int, error) {
 	q := b.p.SpacingMM / sampleDivisions
 	seen := make(map[r3.Vec]struct{})
 	var out []r3.Vec
+	bridged, held := 0, 0
+	var tilt float64
 	push := func(v r3.Vec) error {
 		// A demand triangle can reach below the plate-anchor height; the
 		// part of it down there is anchored, not demand.
@@ -220,10 +232,19 @@ func (b *builder) samples(ctx context.Context) ([]r3.Vec, error) {
 		if _, ok := seen[v]; ok {
 			return nil
 		}
+		seen[v] = struct{}{}
+		switch b.bridgeCheck(v, tilt) {
+		case spanBridged:
+			bridged++
+			return nil
+		case spanHeld:
+			held++
+			return nil
+		case spanNone:
+		}
 		if len(out) == b.lim.MaxSamples {
 			return fmt.Errorf("%w: more than %d support-demand samples", ErrLimit, b.lim.MaxSamples)
 		}
-		seen[v] = struct{}{}
 		out = append(out, v)
 		return nil
 	}
@@ -232,11 +253,13 @@ func (b *builder) samples(ctx context.Context) ([]r3.Vec, error) {
 			continue
 		}
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, 0, 0, err
 		}
+		n, _ := mesh.TriangleNormal(t)
+		tilt = overhang.Angle(n)
 		for _, v := range t {
 			if err := push(v); err != nil {
-				return nil, err
+				return nil, 0, 0, err
 			}
 		}
 		bb := b.ix.boxes[i]
@@ -248,7 +271,7 @@ func (b *builder) samples(ctx context.Context) ([]r3.Vec, error) {
 					continue
 				}
 				if err := push(r3.NewVec(x, y, z)); err != nil {
-					return nil, err
+					return nil, 0, 0, err
 				}
 			}
 		}
@@ -256,7 +279,7 @@ func (b *builder) samples(ctx context.Context) ([]r3.Vec, error) {
 	slices.SortFunc(out, func(a, c r3.Vec) int {
 		return cmp.Or(cmp.Compare(a.Y, c.Y), cmp.Compare(a.X, c.X), cmp.Compare(a.Z, c.Z))
 	})
-	return out, nil
+	return out, bridged, held, nil
 }
 
 // accept decides whether a pillar can stand at (x, y). It returns the pillar

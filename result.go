@@ -194,6 +194,8 @@ type AttemptReport struct {
 	Reason         string           `json:"reason,omitempty"`
 	Supports       int              `json:"supports"`
 	Samples        int              `json:"demand_samples"`
+	BridgedSamples int              `json:"bridged_samples"`
+	HeldSamples    int              `json:"wall_held_samples"`
 	UncoveredCount int              `json:"uncovered_samples"`
 	Uncovered      []support.Sample `json:"uncovered_first,omitempty"`
 }

@@ -267,7 +267,7 @@ func (s *session) addUnchecked() {
 		{Property: "removal_accessibility", Note: "whether each support can be reached and broken away was not analyzed"},
 		{Property: "physical_printability", Note: "no print, slicer run or material test was performed"},
 		{Property: "slicer_interpretation", Note: "slicers can merge, offset or re-interface support bodies; inspect the sliced preview"},
-		{Property: "bridges", Note: "bridges are not detected; every downward surface below the threshold, including spans between walls, counts as support demand"},
+		{Property: "bridges", Note: "spans up to max_bridge_mm between two walls are left unsupported; whether the printer bridges them cleanly was not tested"},
 		{Property: "stability", Note: "centroid_over_contact_hull is a geometric heuristic, not a physical simulation"},
 		{Property: "layer_strength", Note: "the strength term scores the long axis's angle to the plate; no load or layer-adhesion analysis was run"},
 	}
@@ -415,6 +415,7 @@ func (s *session) attempt(ctx context.Context, id int, params support.Params, li
 		return nil, err
 	}
 	cr.Attempt.Samples = plan.Samples
+	cr.Attempt.BridgedSamples, cr.Attempt.HeldSamples = plan.Bridged, plan.Held
 	cr.Attempt.Supports = len(plan.Pillars)
 	if n := len(plan.Uncovered); n > 0 {
 		cr.Attempt.UncoveredCount = n
