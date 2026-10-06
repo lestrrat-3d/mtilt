@@ -61,6 +61,13 @@ type Profile struct {
 	// than this holds too little of the part to the plate.
 	MinFirstLayerAreaMM2 float64 `json:"min_first_layer_area_mm2"`
 
+	// MaxBridgeMM is the longest span the printer draws in the air between
+	// two walls; overhang on a shorter span needs no support. 0 turns
+	// bridges off. MaxBridgeTiltDeg is the steepest tilt from horizontal a
+	// bridged surface may have.
+	MaxBridgeMM      float64 `json:"max_bridge_mm"`
+	MaxBridgeTiltDeg float64 `json:"bridge_max_tilt_deg"`
+
 	// BuildVolume is optional. Without it, fit is reported as unchecked.
 	BuildVolume *BuildVolume `json:"build_volume,omitempty"`
 }
@@ -113,13 +120,16 @@ var profileKeys = []string{
 	"min_feature_mm", "overhang_threshold_deg", "support_spacing_mm", "top_contact_gap_mm",
 	"side_clearance_mm", "contact_width_mm", "pillar_width_mm", "tip_height_mm",
 	"base_width_mm", "base_thickness_mm", "plate_anchor_height_mm", "min_first_layer_area_mm2",
+	"max_bridge_mm", "bridge_max_tilt_deg",
 }
 
 // Validate checks the profile's values and their combinations. It returns
 // ErrInvalidOptions naming the first rule that fails:
 //
 //   - every length is finite and positive, except side_clearance_mm,
-//     plate_anchor_height_mm and min_first_layer_area_mm2, which may be 0;
+//     plate_anchor_height_mm, min_first_layer_area_mm2 and max_bridge_mm,
+//     which may be 0;
+//   - bridge_max_tilt_deg is in [0, overhang_threshold_deg);
 //   - overhang_threshold_deg is in (0, 90);
 //   - layer_height_mm < nozzle_diameter_mm <= extrusion_width_mm <=
 //     min_feature_mm <= contact_width_mm <= pillar_width_mm <= base_width_mm;
@@ -155,6 +165,12 @@ func (p Profile) Validate() error {
 	}
 	if !(p.MinFirstLayerAreaMM2 >= 0) || math.IsInf(p.MinFirstLayerAreaMM2, 0) {
 		return fail("min_first_layer_area_mm2 must be finite and not negative, got %v", p.MinFirstLayerAreaMM2)
+	}
+	if !(p.MaxBridgeMM >= 0) || math.IsInf(p.MaxBridgeMM, 0) {
+		return fail("max_bridge_mm must be finite and not negative, got %v", p.MaxBridgeMM)
+	}
+	if !(p.MaxBridgeTiltDeg >= 0 && p.MaxBridgeTiltDeg < p.OverhangThreshold) {
+		return fail("bridge_max_tilt_deg must be at least 0 and below overhang_threshold_deg, got %v", p.MaxBridgeTiltDeg)
 	}
 	if !(p.OverhangThreshold > 0 && p.OverhangThreshold < 90) {
 		return fail("overhang_threshold_deg must be between 0 and 90, got %v", p.OverhangThreshold)
@@ -199,16 +215,19 @@ func (p Profile) Validate() error {
 
 func (p Profile) supportParams() support.Params {
 	return support.Params{
-		ThresholdDeg:    p.OverhangThreshold,
-		SpacingMM:       p.SupportSpacingMM,
-		ContactWidthMM:  p.ContactWidthMM,
-		PillarWidthMM:   p.PillarWidthMM,
-		TipHeightMM:     p.TipHeightMM,
-		BaseWidthMM:     p.BaseWidthMM,
-		BaseThicknessMM: p.BaseThicknessMM,
-		TopGapMM:        p.TopContactGapMM,
-		SideClearanceMM: p.SideClearanceMM,
-		PlateAnchorMM:   p.PlateAnchorMM,
+		ThresholdDeg:     p.OverhangThreshold,
+		SpacingMM:        p.SupportSpacingMM,
+		ContactWidthMM:   p.ContactWidthMM,
+		PillarWidthMM:    p.PillarWidthMM,
+		TipHeightMM:      p.TipHeightMM,
+		BaseWidthMM:      p.BaseWidthMM,
+		BaseThicknessMM:  p.BaseThicknessMM,
+		TopGapMM:         p.TopContactGapMM,
+		SideClearanceMM:  p.SideClearanceMM,
+		PlateAnchorMM:    p.PlateAnchorMM,
+		LayerHeightMM:    p.LayerHeightMM,
+		MaxBridgeMM:      p.MaxBridgeMM,
+		MaxBridgeTiltDeg: p.MaxBridgeTiltDeg,
 	}
 }
 

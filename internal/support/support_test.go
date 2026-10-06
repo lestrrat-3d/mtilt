@@ -332,3 +332,69 @@ func statusOf(checks []mesh.Check, name string) mesh.Status {
 	}
 	return ""
 }
+
+func TestBridges(t *testing.T) {
+	withBridges := func(maxMM float64) support.Params {
+		p := params
+		p.LayerHeightMM = 0.2
+		p.MaxBridgeMM = maxMM
+		p.MaxBridgeTiltDeg = 5
+		return p
+	}
+	slot := fixture.Prism([][2]float64{{0, 0}, {10, 0}, {10, 30}, {13, 30}, {13, 0}, {23, 0}, {23, 40}, {0, 40}}, 0, 20)
+
+	t.Run("a 3 mm slot is bridged", func(t *testing.T) {
+		placed, tol := placedAsIs(t, slot)
+		plan, err := support.Build(t.Context(), placed, withBridges(10), limits, tol)
+		require.NoError(t, err)
+		require.Positive(t, plan.Bridged)
+		require.Positive(t, plan.Held, "the slot's top edges sit on its walls")
+		require.Zero(t, plan.Samples)
+		require.Empty(t, plan.Pillars)
+		require.Empty(t, plan.Uncovered)
+	})
+
+	t.Run("bridges off leaves the slot unsupportable", func(t *testing.T) {
+		placed, tol := placedAsIs(t, slot)
+		plan, err := support.Build(t.Context(), placed, withBridges(0), limits, tol)
+		require.NoError(t, err)
+		require.Zero(t, plan.Bridged)
+		require.Zero(t, plan.Held)
+		require.NotEmpty(t, plan.Uncovered)
+	})
+
+	t.Run("a 30 mm span is longer than a 10 mm bridge", func(t *testing.T) {
+		placed, tol := placedAsIs(t, fixture.Bridge())
+		plan, err := support.Build(t.Context(), placed, withBridges(10), limits, tol)
+		require.NoError(t, err)
+		require.Zero(t, plan.Bridged)
+		require.NotEmpty(t, plan.Pillars)
+	})
+
+	t.Run("the same span is bridged under a 35 mm limit", func(t *testing.T) {
+		placed, tol := placedAsIs(t, fixture.Bridge())
+		plan, err := support.Build(t.Context(), placed, withBridges(35), limits, tol)
+		require.NoError(t, err)
+		require.Positive(t, plan.Bridged)
+		require.Empty(t, plan.Pillars)
+		require.Empty(t, plan.Uncovered)
+	})
+
+	t.Run("a cantilever has one wall and is never a bridge", func(t *testing.T) {
+		placed, tol := placedAsIs(t, fixture.Bracket())
+		plan, err := support.Build(t.Context(), placed, withBridges(100), limits, tol)
+		require.NoError(t, err)
+		require.Zero(t, plan.Bridged)
+		require.NotEmpty(t, plan.Pillars)
+	})
+
+	t.Run("a sloped ceiling over the tilt limit is not a bridge", func(t *testing.T) {
+		// A 3 mm slot whose ceiling rises 2 mm across its width: 33.7
+		// degrees from horizontal.
+		sloped := fixture.Prism([][2]float64{{0, 0}, {10, 0}, {10, 30}, {13, 32}, {13, 0}, {23, 0}, {23, 40}, {0, 40}}, 0, 20)
+		placed, tol := placedAsIs(t, sloped)
+		plan, err := support.Build(t.Context(), placed, withBridges(10), limits, tol)
+		require.NoError(t, err)
+		require.Zero(t, plan.Bridged)
+	})
+}

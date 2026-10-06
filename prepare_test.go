@@ -192,6 +192,32 @@ func TestPrepare(t *testing.T) {
 	})
 }
 
+func TestPrepareBridges(t *testing.T) {
+	t.Run("a 3 mm slot is bridged, so the upright part needs no supports", func(t *testing.T) {
+		res, err := prepare(t, newBody(t, (*fixture.Bodies).Slot), mtilt.Options{KeepOrientation: true})
+		require.NoError(t, err)
+		att := res.Report.Candidates[0].Attempt
+		require.Positive(t, att.BridgedSamples)
+		require.Zero(t, att.Samples)
+		require.Empty(t, res.Supports)
+	})
+
+	t.Run("without bridges the same slot cannot be supported", func(t *testing.T) {
+		p := mtilt.ExampleProfile()
+		p.MaxBridgeMM = 0
+		_, err := prepare(t, newBody(t, (*fixture.Bodies).Slot), mtilt.Options{Profile: p, KeepOrientation: true})
+		fe := requireFailure(t, err, mtilt.ErrNoFeasibleCandidate)
+		require.Contains(t, fe.Report.Candidates[0].Attempt.Reason, "coverage gap")
+	})
+
+	t.Run("a 30 mm span still gets pillars under a 10 mm bridge limit", func(t *testing.T) {
+		res, err := prepare(t, newBody(t, (*fixture.Bodies).Bridge), mtilt.Options{KeepOrientation: true})
+		require.NoError(t, err)
+		require.Zero(t, res.Report.Candidates[0].Attempt.BridgedSamples)
+		require.NotEmpty(t, res.Supports)
+	})
+}
+
 func TestPrepareStrength(t *testing.T) {
 	t.Run("a standing stick is laid down", func(t *testing.T) {
 		res, err := prepare(t, newBody(t, (*fixture.Bodies).Stick), mtilt.Options{})

@@ -136,3 +136,10 @@ func (b *Bodies) Nail(ctx context.Context) (*decad.Body, error) {
 	}
 	return decad.Union(ctx, flange, stick)
 }
+
+// Slot returns a part with a 3 mm wide slot under a beam, 20 mm deep along
+// Y: posts at X 0..10 and X 13..23, joined by a beam at Z 30..40. The slot's
+// ceiling is a 3 mm span between two walls.
+func (b *Bodies) Slot(ctx context.Context) (*decad.Body, error) {
+	return b.Prism(ctx, [][2]float64{{0, 0}, {10, 0}, {10, 30}, {13, 30}, {13, 0}, {23, 0}, {23, 40}, {0, 40}}, 0, 20)
+}

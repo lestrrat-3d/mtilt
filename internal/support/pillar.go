@@ -43,6 +43,14 @@ type Params struct {
 	SideClearanceMM float64
 	// PlateAnchorMM is the plate-anchor height (see package overhang).
 	PlateAnchorMM float64
+	// LayerHeightMM is the layer height; bridge anchors are looked for
+	// one layer below a sample.
+	LayerHeightMM float64
+	// MaxBridgeMM is the longest span printed in the air between two
+	// walls without support; 0 turns bridges off. MaxBridgeTiltDeg is the
+	// steepest surface tilt from horizontal that counts as a bridge.
+	MaxBridgeMM      float64
+	MaxBridgeTiltDeg float64
 }
 
 // MinHeight is the shortest pillar these params can build: base plus tip.

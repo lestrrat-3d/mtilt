@@ -18,9 +18,9 @@ Each image shows a test part as given (left) and as mtilt prepared it (right): t
 gold, on the build plate. `cd _gallery && go run .` regenerates them.
 
 The nail stands 104 mm tall on a small flange. Standing up, every layer line crosses its length, so mtilt lays it
-down; within the 15 degree tilt limit, a 5 degree tilt needs the fewest supports (49).
+down; within the 15 degree tilt limit, a 5 degree tilt needs the fewest supports (47).
 
-![A nail standing on its flange, then lying almost flat on 49 gold pillars](docs/images/nail.png)
+![A nail standing on its flange, then lying almost flat on 47 gold pillars](docs/images/nail.png)
 
 The oblique cuboid is turned onto its largest face and needs no supports.
 
@@ -51,6 +51,8 @@ span: 41 and 37 pillars.
   least `min_first_layer_area_mm2` on the first layer, so the part does not balance on an edge. Each pillar is a base
   disc, a shaft and a tip that narrows to a small contact, and stops `top_contact_gap_mm` below the surface it
   holds.
+- Leaves short spans between two walls unsupported (up to `max_bridge_mm`, 10 mm in the example profile), because
+  the printer draws them in the air, and leaves points that sit on top of a wall to that wall.
 - For the selected candidate only, adds the moved model (`PlacedCopy`; the input stays live) and one revolved
   pillar body per support to the input's document. It then runs decad's `Verify`, requires that none of these
   bodies interfere and that each is a valid solid, and re-checks the pillars on their tessellations.
