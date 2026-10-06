@@ -239,6 +239,10 @@ below the lowest point of the meshed model over the square enclosing the contact
 Planning works with the square that encloses each round section, so every check made on the squares holds for the
 round pillar.
 
+Every pillar is a solid body. Whether it prints hollow is a slicer setting (README, "Importing into a slicer"): a
+2 mm shaft is too thin for a bore to save material. Hollow geometry is planned for tree trunks
+([roadmap.md](roadmap.md), milestone 7).
+
 ### 7.3 Sampling and coverage
 
 Demand is sampled at every point of a square grid of pitch `support_spacing_mm / 4`, anchored at the origin, that
