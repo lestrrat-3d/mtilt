@@ -18,9 +18,9 @@ Each image shows a test part as given (left) and as mtilt prepared it (right): t
 gold, on the build plate. `cd _gallery && go run .` regenerates them.
 
 The nail stands 104 mm tall on a small flange. Standing up, every layer line crosses its length, so mtilt lays it
-down; within the 15 degree tilt limit, a 5 degree tilt needs the fewest supports (49).
+down; within the 15 degree tilt limit, a 5 degree tilt needs the fewest supports (47).
 
-![A nail standing on its flange, then lying almost flat on 49 gold pillars](docs/images/nail.png)
+![A nail standing on its flange, then lying almost flat on 47 gold pillars](docs/images/nail.png)
 
 The oblique cuboid is turned onto its largest face and needs no supports.
 

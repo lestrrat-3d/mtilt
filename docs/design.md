@@ -339,7 +339,7 @@ The report holds no timing. Two runs with the same body, options and build give 
 
 Every long loop checks its `context.Context`. decad's `Verify` time grows with the number of bodies in the
 document. As a dated measurement (2026-10-06, 24-core machine), `Prepare` took about 4 s for the bracket's 41
-pillars, and about 5 s for the nail fixture, which plans 8 finalists and builds 49 pillars; the estimate sweep
+pillars, and about 5 s for the nail fixture, which plans 8 finalists and builds 47 pillars; the estimate sweep
 itself took milliseconds.
 
 ## 10. Package layout
