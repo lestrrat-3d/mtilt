@@ -150,7 +150,7 @@ func TestBuild(t *testing.T) {
 			require.NotEmpty(t, plan.Pillars)
 
 			requireAllPassed(t, support.RecheckPlan(placed, plan, params, tol))
-			checks, err := support.ValidateAssembly(t.Context(), placed, meshes(t, plan), params.TopGapMM, 0, tol)
+			checks, err := support.ValidateAssembly(t.Context(), placed, meshes(t, plan), allUpright(len(plan.Pillars)), params.TopGapMM, 0, tol)
 			require.NoError(t, err)
 			requireAllPassed(t, checks)
 
@@ -275,7 +275,7 @@ func TestValidateAssembly(t *testing.T) {
 		pl := plan.Pillars[0]
 		pl.TopZ = pl.SurfaceZ + 1
 		bad := append([]*mesh.Mesh{first(t, pl)}, good[1:]...)
-		checks, err := support.ValidateAssembly(t.Context(), placed, bad, params.TopGapMM, 0, tol)
+		checks, err := support.ValidateAssembly(t.Context(), placed, bad, allUpright(len(bad)), params.TopGapMM, 0, tol)
 		require.NoError(t, err)
 		require.Equal(t, mesh.StatusFailed, statusOf(checks, support.CheckSupportModelContact))
 		require.Equal(t, mesh.StatusFailed, statusOf(checks, support.CheckSupportTopGap))
@@ -285,7 +285,7 @@ func TestValidateAssembly(t *testing.T) {
 		pl := plan.Pillars[0]
 		pl.TopZ = pl.SurfaceZ - params.TopGapMM/2
 		bad := append([]*mesh.Mesh{first(t, pl)}, good[1:]...)
-		checks, err := support.ValidateAssembly(t.Context(), placed, bad, params.TopGapMM, 0, tol)
+		checks, err := support.ValidateAssembly(t.Context(), placed, bad, allUpright(len(bad)), params.TopGapMM, 0, tol)
 		require.NoError(t, err)
 		require.Equal(t, mesh.StatusPassed, statusOf(checks, support.CheckSupportModelContact))
 		require.Equal(t, mesh.StatusFailed, statusOf(checks, support.CheckSupportTopGap))
@@ -295,7 +295,7 @@ func TestValidateAssembly(t *testing.T) {
 		pl := plan.Pillars[0]
 		pl.X += params.BaseWidthMM / 2
 		bad := append([]*mesh.Mesh{first(t, pl)}, good...)
-		checks, err := support.ValidateAssembly(t.Context(), placed, bad, params.TopGapMM, 0, tol)
+		checks, err := support.ValidateAssembly(t.Context(), placed, bad, allUpright(len(bad)), params.TopGapMM, 0, tol)
 		require.NoError(t, err)
 		require.Equal(t, mesh.StatusFailed, statusOf(checks, support.CheckSupportSeparation))
 	})
@@ -304,7 +304,7 @@ func TestValidateAssembly(t *testing.T) {
 		lift, err := r3.Translation(r3.NewVec(0, 0, 0.5))
 		require.NoError(t, err)
 		bad := append([]*mesh.Mesh{good[0].Transformed(lift)}, good[1:]...)
-		checks, err := support.ValidateAssembly(t.Context(), placed, bad, params.TopGapMM, 0, tol)
+		checks, err := support.ValidateAssembly(t.Context(), placed, bad, allUpright(len(bad)), params.TopGapMM, 0, tol)
 		require.NoError(t, err)
 		require.Equal(t, mesh.StatusFailed, statusOf(checks, support.CheckSupportOnPlate))
 	})
@@ -312,7 +312,7 @@ func TestValidateAssembly(t *testing.T) {
 	t.Run("open support mesh", func(t *testing.T) {
 		open := &mesh.Mesh{Vertices: good[0].Vertices, Triangles: good[0].Triangles[1:]}
 		bad := append([]*mesh.Mesh{open}, good[1:]...)
-		checks, err := support.ValidateAssembly(t.Context(), placed, bad, params.TopGapMM, 0, tol)
+		checks, err := support.ValidateAssembly(t.Context(), placed, bad, allUpright(len(bad)), params.TopGapMM, 0, tol)
 		require.NoError(t, err)
 		require.Equal(t, mesh.StatusFailed, statusOf(checks, support.CheckSupportTopology))
 	})
@@ -322,6 +322,14 @@ func first(t *testing.T, pl support.Pillar) *mesh.Mesh {
 	t.Helper()
 	m, _ := pillarMesh(t, params, pl)
 	return m
+}
+
+func allUpright(n int) []bool {
+	out := make([]bool, n)
+	for i := range out {
+		out[i] = true
+	}
+	return out
 }
 
 func statusOf(checks []mesh.Check, name string) mesh.Status {
@@ -396,5 +404,69 @@ func TestBridges(t *testing.T) {
 		plan, err := support.Build(t.Context(), placed, withBridges(10), limits, tol)
 		require.NoError(t, err)
 		require.Zero(t, plan.Bridged)
+	})
+}
+
+func TestBranches(t *testing.T) {
+	withBranches := params
+	withBranches.MaxLeanDeg = 40
+
+	t.Run("occluded overhang is covered by branches rooted beside the base", func(t *testing.T) {
+		placed, tol := placedAsIs(t, fixture.Occluded())
+		plan, err := support.Build(t.Context(), placed, withBranches, limits, tol)
+		require.NoError(t, err)
+		require.Empty(t, plan.Uncovered)
+		require.NotEmpty(t, plan.Pillars)
+		requireAllPassed(t, support.RecheckPlan(placed, plan, withBranches, tol))
+		b := placed.Bounds()
+		slope := math.Tan(40 * math.Pi / 180)
+		for _, pl := range plan.Pillars {
+			require.True(t, pl.IsBranch())
+			// The foot is off the base, and the lean stays within 40
+			// degrees of vertical.
+			off := pl.FootX > b.Max.X || pl.FootX < b.Min.X || pl.FootY > b.Max.Y || pl.FootY < b.Min.Y
+			require.True(t, off, "foot %v,%v", pl.FootX, pl.FootY)
+			run := math.Hypot(pl.X-pl.FootX, pl.Y-pl.FootY)
+			rise := pl.TopZ - withBranches.TipHeightMM - pl.KneeZ
+			require.LessOrEqual(t, run, rise*slope+1e-9)
+			require.GreaterOrEqual(t, pl.KneeZ, withBranches.BaseThicknessMM+1-1e-9)
+		}
+	})
+
+	t.Run("branches are off when the lean limit is 0", func(t *testing.T) {
+		placed, tol := placedAsIs(t, fixture.Occluded())
+		plan, err := support.Build(t.Context(), placed, params, limits, tol)
+		require.NoError(t, err)
+		require.Empty(t, plan.Pillars)
+		require.NotEmpty(t, plan.Uncovered)
+	})
+
+	t.Run("a branch body is one solid swept along its path", func(t *testing.T) {
+		placed, tol := placedAsIs(t, fixture.Occluded())
+		plan, err := support.Build(t.Context(), placed, withBranches, limits, tol)
+		require.NoError(t, err)
+		pl := plan.Pillars[0]
+		body, err := withBranches.Body(t.Context(), sketch.NewWorld(), decad.New(), pl)
+		require.NoError(t, err)
+		require.True(t, body.IsSolid())
+		require.Len(t, body.Lumps(), 1)
+		bb, err := body.Bounds()
+		require.NoError(t, err)
+		require.InDelta(t, 0, bb.Min.Z, 1e-9)
+		require.InDelta(t, pl.TopZ, bb.Max.Z, 1e-9)
+		vol, err := body.Volume()
+		require.NoError(t, err)
+		got, err := vol.Value.In(units.CubicMillimeter)
+		require.NoError(t, err)
+		// The 16-gon is inscribed in the circle the frustum estimate uses
+		// (area ratio 0.9745), and the mitre wedges add a little.
+		want := withBranches.Volume(pl)
+		require.InDelta(t, want*0.9745, got, want*0.03)
+
+		m, _, err := mesh.FromBody(t.Context(), body, tessellationTolMM)
+		require.NoError(t, err)
+		rep, err := mesh.Validate(t.Context(), m, mesh.ToleranceFor(m.Bounds()))
+		require.NoError(t, err)
+		require.Empty(t, rep.Failed())
 	})
 }

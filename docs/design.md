@@ -214,11 +214,13 @@ candidate (`bridged_samples`, `wall_held_samples`).
 
 ### 7.1 Geometry class
 
-mtilt supports demand surfaces that a vertical line from the build plate meets before any other part of the
-model, with room below for a pillar and its clearance zones. Demand above other model geometry (occluded), demand
-too close to the plate for the shortest pillar, and demand in gaps narrower than a pillar's clearance zone are
-reported as uncovered, and the candidate fails. mtilt never routes a pillar through the model, never starts one in
-mid-air, and never drops demand it cannot cover.
+Every support stands on the build plate; none roots on the model. A straight pillar holds demand that a vertical
+line from the plate meets before any other part of the model. A **branch** (section 7.7) holds demand that has
+model geometry below it: its foot stands elsewhere on the plate, and it leans in, at most `max_branch_lean_deg` from
+vertical, around that geometry. Demand that neither can reach, demand too close to the plate for the shortest
+support, and demand in gaps narrower than a support's clearance zone are reported as uncovered, and the candidate
+fails. mtilt never routes a support through the model, never starts one in mid-air, and never drops demand it
+cannot cover.
 
 ### 7.2 Pillar geometry
 
@@ -264,6 +266,7 @@ grid within `support_spacing_mm` of it, nearest first.
    usually beside a wall) gets the first accepted nearby position that covers it.
 2. **Grid.** Every node of a `support_spacing_mm` grid anchored at the origin, inside the samples' bounding box.
 3. **Fill.** Each sample still uncovered tries its own position, then its nearby positions.
+4. **Branch.** Each sample still uncovered gets a branch when one fits (section 7.7).
 
 A position is accepted when the vertical line through it meets a demand triangle first; the model's lowest point
 over the contact square leaves room for base, tip and gap; no clearance zone touches the model; and its base square
@@ -286,7 +289,34 @@ triangle lies entirely outside the model.
 Bases must not touch or overlap. The profile requires `base_width_mm < support_spacing_mm`, so grid pillars never
 collide; every other pillar is placed only when its base square is apart from every accepted one.
 
-### 7.7 Verification
+### 7.7 Branches
+
+A branch holds a sample no straight pillar can (`internal/support/branch.go`). From the plate up it is a foot cone
+(`base_width_mm` to `pillar_width_mm` across, `base_thickness_mm` tall), a vertical shaft to its **knee**, a lean
+from the knee to the tip start, and the same tip as a pillar. It is built as one decad body: a regular 16-gon of
+radius `base_width_mm / 2` on the XY plane, swept with `WithMitredJoins` along those four spans and scaled at each
+path point to that point's radius (`WithSectionScale`). The path starts with the vertical foot because decad's
+sweep must start along its profile plane's normal.
+
+Placement, for one sample:
+
+1. **Tip.** The sample's own position, then the points of a `support_spacing_mm / 4` grid within half a spacing of
+   it, nearest first. A tip is usable when the first surface above `z - dz` (the coverage rule's height band) is
+   demand at the sample's height; its top face sits the top gap below the lowest model point over the contact
+   square, counting only the model above that band.
+2. **Foot.** The points of a `support_spacing_mm / 4` grid around the tip, nearest first, out to the distance a
+   `max_branch_lean_deg` lean can cover between the tip start and the lowest knee (`base_thickness_mm` plus 1 mm
+   of shaft). Each foot sets the knee where the lean from it reaches the tip start at exactly the lean limit.
+3. The first foot whose foot, shaft and lean, each widened by `side_clearance_mm`, touch neither the model nor any
+   accepted support, and whose tip swept up by the top gap touches no model triangle, is taken.
+
+Clearance zones around a lean are two 8-gons, enclosing the 16-gon, at its ends, lengthened by the shaft radius at
+both ends so they also enclose the mitre wedges. Support-to-support checks use separating axes between these convex
+zones. A branch's cost (section 5.2) uses its frustum volume along the path.
+
+Branches do not merge into trunks yet ([roadmap.md](roadmap.md)): every branch has its own foot.
+
+### 7.8 Verification
 
 On the plan, before any body is built: `RecheckPlan` re-runs the clearance zones and the coverage rule, and the
 model plus pillar footprints are checked against the build volume.
@@ -300,8 +330,8 @@ After the bodies are built, for the selected candidate only:
 | `tessellated_support_topology` | each pillar's tessellation passes `mesh.Validate` |
 | `tessellated_support_on_plate` | each pillar's lowest Z is 0 |
 | `tessellated_support_model_contact` | no pillar triangle touches a model triangle |
-| `tessellated_support_top_gap` | the model's lowest point over each top face is at least the gap above it |
-| `tessellated_support_separation` | pillar XY bounding boxes are pairwise disjoint |
+| `tessellated_support_top_gap` | the model's lowest point above each top face, over that face, is at least the gap above it |
+| `tessellated_support_separation` | the XY bounding boxes of straight pillars are pairwise disjoint (a branch is checked against other supports while planning, and by `decad_interference`) |
 | `proper_rigid_transform` | the transform does not mirror |
 
 The tessellated checks allow the model's and the pillars' tessellation bounds. `Verify` runs over the whole
@@ -309,7 +339,7 @@ document; mtilt keeps only the rows for the assembly's own bodies. It runs witho
 measured about 9.7 s against 0.33 s for a bracket and 35 pillars, because it measures every pair; the gaps and
 clearances come from the mesh checks above.
 
-### 7.8 What is not verified
+### 7.9 What is not verified
 
 - Removal: mtilt does not check that a support can be reached or broken away.
 - Physical behavior: no support has been printed, sliced or tested by mtilt.
@@ -320,13 +350,14 @@ The report lists these under `unchecked`.
 
 ## 8. Result and the document
 
-`Prepare` returns the moved model, the support bodies (numbered by Y, then X, of their center), the transform and
-the report. The input body stays live and unchanged. decad has no operation that removes a body from a document,
-so mtilt adds bodies only after a plan has passed every planning check:
+`Prepare` returns the moved model, the support bodies (numbered by Y, then X, of their tip), the transform and the
+report. The input body stays live and unchanged. mtilt adds bodies only after a plan has passed every planning
+check:
 
 - `ErrNoFeasibleCandidate`, `ErrInvalidBody`, `ErrUnsupportedInput`, `ErrLimit`: nothing is added.
-- `ErrAssembly`: the model copy and pillars were built and failed decad's verification. They stay live in the
-  document, and `FailureError.Result` holds them.
+- `ErrAssembly`, or an error while building bodies: the bodies mtilt added are taken out of the document again
+  with `decad.Document.Remove`. `FailureError.Result` still holds them for inspection; they read their geometry
+  but take no further operations.
 
 The report holds no timing. Two runs with the same body, options and build give byte-identical reports.
 
@@ -367,7 +398,7 @@ itself took milliseconds.
 
 | Module | Use | Reason |
 |---|---|---|
-| `github.com/lestrrat-3d/decad` | input bodies, tessellation, pillar bodies, `Verify`, `export` in examples | the lestrrat-3d CAD engine mtilt prepares bodies from |
+| `github.com/lestrrat-3d/decad` | input bodies, tessellation, pillar and branch bodies (revolve, mitred sweep), `Verify`, `Remove`, `export` in examples | the lestrrat-3d CAD engine mtilt prepares bodies from |
 | `github.com/lestrrat-3d/sketch` | pillar outlines and fixture profiles | decad builds bodies from sketch profiles |
 | `github.com/lestrrat-3d/r3` | `Vec`, `Transform` | the lestrrat-3d vector and rigid-transform library; it rejects non-finite values, keeps rotations orthonormal, and reports reflections |
 | `github.com/lestrrat-3d/units` | lengths passed to and read from decad | decad's quantities are `units.Value` |

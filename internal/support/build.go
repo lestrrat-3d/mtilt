@@ -157,6 +157,9 @@ func Build(ctx context.Context, placed *mesh.Mesh, p Params, lim Limits, tol mes
 	if err != nil {
 		return nil, err
 	}
+	if uncovered, err = b.branchPass(ctx, uncovered); err != nil {
+		return nil, err
+	}
 	plan.Uncovered = uncovered
 
 	plan.Pillars = slices.Clone(b.pillars)

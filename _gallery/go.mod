@@ -5,7 +5,7 @@ go 1.26.8
 replace github.com/lestrrat-3d/mtilt => ..
 
 require (
-	github.com/lestrrat-3d/decad v0.0.0-20261006065031-c84f84c79d96
+	github.com/lestrrat-3d/decad v0.0.0-20261006124841-85163ab073d4
 	github.com/lestrrat-3d/mtilt v0.0.0-20261006094105-7eea28095bd0
 	github.com/lestrrat-3d/r3 v0.0.0-20261005214828-6011e4189399
 	github.com/lestrrat-3d/solidlens v0.0.0-20261005074038-bae28fc9f7c6

@@ -50,8 +50,8 @@ Local `golangci-lint` version MUST match CI's before trusting a clean local run.
   Unavailable metric → `null`/omitted, NEVER 0.
 - **NEVER return success-shaped failures.** Uncovered demand, collision, build-volume overflow, failed decad
   verification or limit hit → fail with a reason. NEVER drop demand because no pillar fits.
-- **Add bodies to the caller's document only after the plan passed every planning check.** decad cannot remove a
-  body. Planning failures add nothing; only `ErrAssembly` leaves bodies behind, and returns them.
+- **Add bodies to the caller's document only after the plan passed every planning check.** On a later failure
+  (body build error, `ErrAssembly`) remove every added body with `Document.Remove`.
 - **NEVER consume or modify the input body.** Use `PlacedCopy`, never `Placed`, on it. Temporary bodies mtilt
   builds itself may be `Placed` (that retires them).
 - **Model moves by one proper rigid transform only.** NEVER mirror, scale, remesh or merge supports into it.
@@ -61,8 +61,10 @@ Local `golangci-lint` version MUST match CI's before trusting a clean local run.
   clearances stay profile values.
 - **decad pairwise clearance (`WithClearances`) is too slow for pillars** (9.7 s vs 0.33 s for 36 bodies). Use
   `Verify` for interference + validity; check gaps on meshes.
-- **decad booleans reject face-touching operands.** Build multi-part solids as one revolve/extrude, or overlap
+- **decad booleans reject face-touching operands.** Build multi-part solids as one revolve/extrude/sweep, or overlap
   the operands.
+- **decad sweeps start along the profile normal, exactly.** Draw branch profiles on the XY plane and start every
+  path with a vertical span; never a float-rotated sketch plane.
 - **Determinism:** no map iteration into output order, no `time.Now` or randomness in the library, no timing in
   the report. Sort with explicit tie-breaks.
 - **Bounded work:** every loop over triangles, samples or candidates checks `ctx` and respects `Limits`.
@@ -82,8 +84,9 @@ Local `golangci-lint` version MUST match CI's before trusting a clean local run.
 
 - Input: one solid decad body with one lump whose tessellation passes every mesh check. Self-intersection
   unchecked.
-- Supports: round pillars from the plate to demand surfaces reachable straight from below. Occluded, too-low or
-  too-narrow demand → uncovered → candidate fails. Surfaces within `plate_anchor_height_mm` of the plate need no
+- Supports: round pillars from the plate to demand reachable straight from below; branches (one mitred decad sweep
+  each, foot beside the obstruction, lean ≤ `max_branch_lean_deg`) for demand above other model geometry. NEVER
+  root a support on the model. Unreachable, too-low or too-narrow demand → uncovered → candidate fails. Surfaces within `plate_anchor_height_mm` of the plate need no
   support. Spans up to `max_bridge_mm` between two walls, and points on top of a wall, need no support. Removal
   and layer strength unverified.
 

@@ -452,16 +452,20 @@ func (s *session) build(ctx context.Context, id int, plan *support.Plan) (*Resul
 	res := &Result{Model: model, Transform: full, Report: *rep}
 	params := s.opts.Profile.supportParams()
 	w := sketch.NewWorld()
-	for _, pl := range plan.Pillars {
+	upright := make([]bool, len(plan.Pillars))
+	for i, pl := range plan.Pillars {
 		pb, err := params.Body(ctx, w, s.body.Document(), pl)
 		if err != nil {
+			s.remove(res)
 			return nil, fmt.Errorf("mtilt: building support body: %w", err)
 		}
 		res.Supports = append(res.Supports, pb)
+		upright[i] = !pl.IsBranch()
 	}
 
-	checks, err := s.verifyAssembly(ctx, res)
+	checks, err := s.verifyAssembly(ctx, res, upright)
 	if err != nil {
+		s.remove(res)
 		return nil, err
 	}
 	rep.Validation = append(rep.Validation, checks...)
@@ -488,9 +492,16 @@ func (s *session) build(ctx context.Context, id int, plan *support.Plan) (*Resul
 		sr := SupportReport{
 			ID:         fmt.Sprintf("support-%04d", i+1),
 			CenterMM:   [2]float64{pl.X, pl.Y},
+			Kind:       "pillar",
 			SurfaceZMM: pl.SurfaceZ,
 			TopZMM:     pl.TopZ,
 			Origin:     string(pl.Origin),
+		}
+		if pl.IsBranch() {
+			sr.Kind = "branch"
+			foot := [2]float64{pl.FootX, pl.FootY}
+			knee := pl.KneeZ
+			sr.FootMM, sr.KneeZMM = &foot, &knee
 		}
 		if vol, err := res.Supports[i].Volume(); err == nil {
 			sr.VolumeMM3, _ = vol.Value.In(units.CubicMillimeter)
@@ -511,16 +522,29 @@ func (s *session) build(ctx context.Context, id int, plan *support.Plan) (*Resul
 			cr.Attempt.Reason = fmt.Sprintf("assembly check %s failed: %s", c.Name, c.Detail)
 			rep.Selected = nil
 			res.Report = *rep
+			s.remove(res)
 			return nil, &FailureError{Err: fmt.Errorf("%w: %s: %s", ErrAssembly, c.Name, c.Detail), Report: rep, Result: res}
 		}
 	}
 	return res, nil
 }
 
+// remove takes every body Prepare added for res out of the document again
+// (decad.Document.Remove), so a failed preparation leaves the caller's
+// document as it was. The removed bodies stay readable.
+func (s *session) remove(res *Result) {
+	doc := s.body.Document()
+	for _, b := range append([]*decad.Body{res.Model}, res.Supports...) {
+		if b != nil {
+			_ = doc.Remove(b)
+		}
+	}
+}
+
 // verifyAssembly runs decad's Verify over the document and keeps the rows
-// that concern the assembly's own bodies, then re-checks the pillars on
-// their tessellations.
-func (s *session) verifyAssembly(ctx context.Context, res *Result) ([]mesh.Check, error) {
+// that concern the assembly's own bodies, then re-checks the supports on
+// their tessellations. upright[i] is true for straight pillars.
+func (s *session) verifyAssembly(ctx context.Context, res *Result, upright []bool) ([]mesh.Check, error) {
 	ours := map[*decad.Body]string{res.Model: "model"}
 	for i, b := range res.Supports {
 		ours[b] = fmt.Sprintf("support-%04d", i+1)
@@ -572,7 +596,7 @@ func (s *session) verifyAssembly(ctx context.Context, res *Result) ([]mesh.Check
 		supports[i] = m
 		sbound = math.Max(sbound, bound)
 	}
-	more, err := support.ValidateAssembly(ctx, model, supports, s.opts.Profile.TopContactGapMM, mbound+sbound, s.tol)
+	more, err := support.ValidateAssembly(ctx, model, supports, upright, s.opts.Profile.TopContactGapMM, mbound+sbound, s.tol)
 	if err != nil {
 		return nil, err
 	}

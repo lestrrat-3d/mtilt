@@ -165,6 +165,44 @@ func (ix *index) lowestOver(x, y, half float64) float64 {
 	return best
 }
 
+// lowestOverAbove is lowestOver restricted to the part of the model at or
+// above zFloor: each triangle is also clipped to the half-space Z >= zFloor.
+// It returns +Inf when nothing of the model is there.
+func (ix *index) lowestOverAbove(x, y, half, zFloor float64) float64 {
+	best := math.Inf(1)
+	x0, y0, x1, y1 := x-half, y-half, x+half, y+half
+	ix.query(x0, y0, x1, y1, func(i int) bool {
+		bb := ix.boxes[i]
+		if bb.Max.Z < zFloor || bb.Min.Z >= best {
+			return true
+		}
+		poly := clipToRect(ix.tris[i][:], x0, y0, x1, y1)
+		poly = clipAbove(poly, zFloor)
+		for _, v := range poly {
+			best = math.Min(best, v.Z)
+		}
+		return true
+	})
+	return best
+}
+
+// clipAbove clips a polygon to the half-space Z >= z.
+func clipAbove(poly []r3.Vec, z float64) []r3.Vec {
+	var out []r3.Vec
+	for i := range poly {
+		p, q := poly[i], poly[(i+1)%len(poly)]
+		dp, dq := p.Z-z, q.Z-z
+		if dp >= 0 {
+			out = append(out, p)
+		}
+		if (dp >= 0) != (dq >= 0) {
+			s := dp / (dp - dq)
+			out = append(out, p.Add(q.Sub(p).Scale(s)))
+		}
+	}
+	return out
+}
+
 // clipToRect clips a polygon against the XY rectangle by Sutherland-Hodgman,
 // interpolating Z along cut edges.
 func clipToRect(poly []r3.Vec, x0, y0, x1, y1 float64) []r3.Vec {

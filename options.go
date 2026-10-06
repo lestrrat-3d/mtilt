@@ -68,6 +68,12 @@ type Profile struct {
 	MaxBridgeMM      float64 `json:"max_bridge_mm"`
 	MaxBridgeTiltDeg float64 `json:"bridge_max_tilt_deg"`
 
+	// MaxBranchLeanDeg is the steepest a branch support may lean from
+	// vertical; it must leave the branch's own walls printable, so it is
+	// at most 90 - overhang_threshold_deg. 0 turns branches off, leaving
+	// straight pillars only.
+	MaxBranchLeanDeg float64 `json:"max_branch_lean_deg"`
+
 	// BuildVolume is optional. Without it, fit is reported as unchecked.
 	BuildVolume *BuildVolume `json:"build_volume,omitempty"`
 }
@@ -120,7 +126,7 @@ var profileKeys = []string{
 	"min_feature_mm", "overhang_threshold_deg", "support_spacing_mm", "top_contact_gap_mm",
 	"side_clearance_mm", "contact_width_mm", "pillar_width_mm", "tip_height_mm",
 	"base_width_mm", "base_thickness_mm", "plate_anchor_height_mm", "min_first_layer_area_mm2",
-	"max_bridge_mm", "bridge_max_tilt_deg",
+	"max_bridge_mm", "bridge_max_tilt_deg", "max_branch_lean_deg",
 }
 
 // Validate checks the profile's values and their combinations. It returns
@@ -168,6 +174,9 @@ func (p Profile) Validate() error {
 	}
 	if !(p.MaxBridgeMM >= 0) || math.IsInf(p.MaxBridgeMM, 0) {
 		return fail("max_bridge_mm must be finite and not negative, got %v", p.MaxBridgeMM)
+	}
+	if !(p.MaxBranchLeanDeg >= 0 && p.MaxBranchLeanDeg <= 90-p.OverhangThreshold) {
+		return fail("max_branch_lean_deg must be between 0 and 90 - overhang_threshold_deg, got %v", p.MaxBranchLeanDeg)
 	}
 	if !(p.MaxBridgeTiltDeg >= 0 && p.MaxBridgeTiltDeg < p.OverhangThreshold) {
 		return fail("bridge_max_tilt_deg must be at least 0 and below overhang_threshold_deg, got %v", p.MaxBridgeTiltDeg)
@@ -228,6 +237,7 @@ func (p Profile) supportParams() support.Params {
 		LayerHeightMM:    p.LayerHeightMM,
 		MaxBridgeMM:      p.MaxBridgeMM,
 		MaxBridgeTiltDeg: p.MaxBridgeTiltDeg,
+		MaxLeanDeg:       p.MaxBranchLeanDeg,
 	}
 }
 

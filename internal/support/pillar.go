@@ -51,6 +51,9 @@ type Params struct {
 	// steepest surface tilt from horizontal that counts as a bridge.
 	MaxBridgeMM      float64
 	MaxBridgeTiltDeg float64
+	// MaxLeanDeg is the steepest a branch may lean from vertical; 0 turns
+	// branches off.
+	MaxLeanDeg float64
 }
 
 // MinHeight is the shortest pillar these params can build: base plus tip.
@@ -84,6 +87,8 @@ const (
 	// OriginFill is a position added to cover a sample the grid left
 	// uncovered.
 	OriginFill Origin = "fill"
+	// OriginBranch is a branch: its foot stands elsewhere on the plate.
+	OriginBranch Origin = "branch"
 )
 
 // Pillar is one support pillar, centered on (X, Y).
@@ -95,6 +100,9 @@ type Pillar struct {
 	// TopZ is the height of the pillar's top face.
 	TopZ   float64
 	Origin Origin
+	// FootX, FootY and KneeZ place a branch's foot and the top of its
+	// vertical shaft (see branch.go). They are zero for a straight pillar.
+	FootX, FootY, KneeZ float64
 }
 
 type level struct {
@@ -123,6 +131,9 @@ func (p Params) levels(pl Pillar) []level {
 // outline is drawn in a new sketch in w, revolved about the sketch's U axis,
 // and placed upright at (X, Y); only the placed body stays live in doc.
 func (p Params) Body(ctx context.Context, w *sketch.World, doc *decad.Document, pl Pillar) (*decad.Body, error) {
+	if pl.IsBranch() {
+		return p.branchBody(ctx, w, doc, pl)
+	}
 	s, err := w.CreateSketch(w.XY())
 	if err != nil {
 		return nil, err
@@ -169,6 +180,9 @@ func (p Params) Body(ctx context.Context, w *sketch.World, doc *decad.Document, 
 //     holds). Lateral clearance is not applied within the tip's height, so
 //     the narrowing tip can approach a sloped surface it holds.
 func (p Params) clearanceZones(pl Pillar) []convex {
+	if pl.IsBranch() {
+		return p.branchZones(pl, p.SideClearanceMM)
+	}
 	sc := p.SideClearanceMM
 	base, shaft, contact := p.BaseWidthMM/2, p.PillarWidthMM/2, p.ContactWidthMM/2
 	tip := p.tipStart(pl)
@@ -183,6 +197,9 @@ func (p Params) clearanceZones(pl Pillar) []convex {
 // the sum, over consecutive levels at different heights, of the cone
 // frustum pi h (r1^2 + r1 r2 + r2^2) / 3.
 func (p Params) Volume(pl Pillar) float64 {
+	if pl.IsBranch() {
+		return p.branchVolume(pl)
+	}
 	lv := p.levels(pl)
 	var v float64
 	for i := 1; i < len(lv); i++ {
