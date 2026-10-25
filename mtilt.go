@@ -441,7 +441,7 @@ func (s *session) build(ctx context.Context, id int, plan *support.Plan) (*Resul
 	rep := s.report
 	full := s.full[id]
 
-	model, err := s.body.PlacedCopy(ctx, full)
+	model, err := decad.Copy(ctx, s.body, decad.WithCopyPlacement(full))
 	if err != nil {
 		return nil, fmt.Errorf("mtilt: placing the model: %w", err)
 	}
@@ -559,13 +559,12 @@ type supportBody struct {
 }
 
 // remove takes every body Prepare added for res out of the document again
-// (decad.Document.Remove), so a failed preparation leaves the caller's
+// (decad.Remove), so a failed preparation leaves the caller's
 // document as it was. The removed bodies stay readable.
 func (s *session) remove(res *Result) {
-	doc := s.body.Document()
 	for _, b := range append([]*decad.Body{res.Model}, res.Supports...) {
 		if b != nil {
-			_ = doc.Remove(b)
+			_ = decad.Remove(b)
 		}
 	}
 }
@@ -655,8 +654,7 @@ type Analysis struct {
 func Analyze(ctx context.Context, body *decad.Body, opts Options) (*Analysis, error) {
 	s, err := newSession(ctx, body, opts)
 	if err != nil {
-		var fe *FailureError
-		if errors.As(err, &fe) {
+		if fe, ok := errors.AsType[*FailureError](err); ok {
 			return &Analysis{Report: *fe.Report}, err
 		}
 		return nil, err

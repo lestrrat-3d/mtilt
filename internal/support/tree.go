@@ -57,13 +57,13 @@ func (p Params) memberPath(pl Pillar) ([]r3.Vec, []float64) {
 	rs := p.PillarWidthMM / 2
 	tip := pl.TopZ - p.TipHeightMM
 	return []r3.Vec{
-			r3.NewVec(pl.FootX, pl.FootY, pl.RootZ),
-			r3.NewVec(pl.FootX, pl.FootY, pl.KneeZ),
-			r3.NewVec(pl.X, pl.Y, tip),
-			r3.NewVec(pl.X, pl.Y, pl.TopZ),
-		}, []float64{
-			rs, rs, rs, p.ContactWidthMM / 2,
-		}
+		r3.NewVec(pl.FootX, pl.FootY, pl.RootZ),
+		r3.NewVec(pl.FootX, pl.FootY, pl.KneeZ),
+		r3.NewVec(pl.X, pl.Y, tip),
+		r3.NewVec(pl.X, pl.Y, pl.TopZ),
+	}, []float64{
+		rs, rs, rs, p.ContactWidthMM / 2,
+	}
 }
 
 // trunkZones returns the solids around a trunk: its base and its shaft,
@@ -125,7 +125,7 @@ func sweepAlong(ctx context.Context, w *sketch.World, doc *decad.Document, pts [
 		opts = append(opts, decad.WithMitredJoins())
 	}
 	opts = append(opts, decad.WithSectionScale(scales...))
-	body, err := doc.Sweep(ctx, s, s.Profiles()[0], path, opts...)
+	body, err := decad.Sweep(ctx, doc, s, s.Profiles()[0], path, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("support: sweeping: %w", err)
 	}
@@ -133,7 +133,7 @@ func sweepAlong(ctx context.Context, w *sketch.World, doc *decad.Document, pts [
 	if err != nil {
 		return nil, err
 	}
-	return body.Placed(ctx, mv)
+	return decad.Transform(ctx, body, mv)
 }
 
 // TreeBody builds a tree as one decad body: the trunk swept from the plate to
