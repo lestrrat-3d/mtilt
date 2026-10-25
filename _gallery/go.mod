@@ -10,7 +10,7 @@ require (
 	github.com/lestrrat-3d/r3 v0.0.0-20261005214828-6011e4189399
 	github.com/lestrrat-3d/solidlens v0.0.0-20261005074038-bae28fc9f7c6
 	github.com/lestrrat-3d/units v0.0.0-20261004172310-91d157ffd2a9
-	golang.org/x/image v0.46.0
+	golang.org/x/image v0.47.0
 )
 
 require (
