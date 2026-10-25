@@ -13,6 +13,7 @@ linters:
     - exhaustive
     # exhaustruct flags every partially-initialized struct literal.
     - exhaustruct
+    - exhaustruct_v5
     - funcorder
     - funlen
     - gochecknoglobals

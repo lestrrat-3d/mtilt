@@ -169,7 +169,7 @@ func (p Params) Body(ctx context.Context, w *sketch.World, doc *decad.Document, 
 		return nil, fmt.Errorf("support: pillar outline gave %d profiles", len(profiles))
 	}
 	axis := decad.SketchLine{Start: decad.Point2{U: 0, V: 0}, End: decad.Point2{U: 1, V: 0}}
-	body, err := doc.Revolve(s, profiles[0], axis, decad.FullRevolution{})
+	body, err := decad.Revolve(ctx, doc, s, profiles[0], axis, decad.FullRevolution{})
 	if err != nil {
 		return nil, fmt.Errorf("support: revolving pillar: %w", err)
 	}
@@ -178,7 +178,7 @@ func (p Params) Body(ctx context.Context, w *sketch.World, doc *decad.Document, 
 	if err != nil {
 		return nil, err
 	}
-	return body.Placed(ctx, up)
+	return decad.Transform(ctx, body, up)
 }
 
 // clearanceZones returns the solids that must not touch the part:

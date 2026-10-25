@@ -48,14 +48,14 @@ func (p Params) path(pl Pillar) ([]r3.Vec, []float64) {
 	foot := r3.NewVec(pl.FootX, pl.FootY, 0)
 	tip := pl.TopZ - p.TipHeightMM
 	return []r3.Vec{
-			foot,
-			foot.Add(r3.NewVec(0, 0, p.BaseThicknessMM)),
-			r3.NewVec(pl.FootX, pl.FootY, pl.KneeZ),
-			r3.NewVec(pl.X, pl.Y, tip),
-			r3.NewVec(pl.X, pl.Y, pl.TopZ),
-		}, []float64{
-			p.BaseWidthMM / 2, p.PillarWidthMM / 2, p.PillarWidthMM / 2, p.PillarWidthMM / 2, p.ContactWidthMM / 2,
-		}
+		foot,
+		foot.Add(r3.NewVec(0, 0, p.BaseThicknessMM)),
+		r3.NewVec(pl.FootX, pl.FootY, pl.KneeZ),
+		r3.NewVec(pl.X, pl.Y, tip),
+		r3.NewVec(pl.X, pl.Y, pl.TopZ),
+	}, []float64{
+		p.BaseWidthMM / 2, p.PillarWidthMM / 2, p.PillarWidthMM / 2, p.PillarWidthMM / 2, p.ContactWidthMM / 2,
+	}
 }
 
 // branchBody sweeps a branch as one decad body: a regular branchSides-gon of
@@ -89,7 +89,7 @@ func (p Params) branchBody(ctx context.Context, w *sketch.World, doc *decad.Docu
 	if err != nil {
 		return nil, fmt.Errorf("support: branch path: %w", err)
 	}
-	body, err := doc.Sweep(ctx, s, s.Profiles()[0], path, decad.WithMitredJoins(), decad.WithSectionScale(scales...))
+	body, err := decad.Sweep(ctx, doc, s, s.Profiles()[0], path, decad.WithMitredJoins(), decad.WithSectionScale(scales...))
 	if err != nil {
 		return nil, fmt.Errorf("support: sweeping branch: %w", err)
 	}
@@ -97,7 +97,7 @@ func (p Params) branchBody(ctx context.Context, w *sketch.World, doc *decad.Docu
 	if err != nil {
 		return nil, err
 	}
-	return body.Placed(ctx, mv)
+	return decad.Transform(ctx, body, mv)
 }
 
 // branchVolume returns a branch's volume as the sum of cone frustums along

@@ -44,7 +44,7 @@ func (b *Bodies) Prism(ctx context.Context, poly [][2]float64, y0, y1 float64) (
 	if len(profiles) != 1 {
 		return nil, fmt.Errorf("fixture: polygon gave %d profiles", len(profiles))
 	}
-	body, err := b.Doc.Extrude(s, profiles[0], decad.Distance{D: units.Millimeters(y1 - y0), Dir: decad.Along})
+	body, err := decad.Extrude(ctx, b.Doc, s, profiles[0], decad.Distance{D: units.Millimeters(y1 - y0), Dir: decad.Along})
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +54,7 @@ func (b *Bodies) Prism(ctx context.Context, poly [][2]float64, y0, y1 float64) (
 	if err != nil {
 		return nil, err
 	}
-	return body.Placed(ctx, turn)
+	return decad.Transform(ctx, body, turn)
 }
 
 // Box returns the axis-aligned box from lo to hi.
@@ -78,7 +78,7 @@ func (b *Bodies) ObliqueCuboid(ctx context.Context) (*decad.Body, error) {
 	if err != nil {
 		return nil, err
 	}
-	return box.Placed(ctx, rot)
+	return decad.Transform(ctx, box, rot)
 }
 
 // Bracket returns the Γ-shaped bracket of the soup builder Bracket.
@@ -116,7 +116,7 @@ func (b *Bodies) Rod(ctx context.Context) (*decad.Body, error) {
 	if _, err := s.Solve(ctx); err != nil {
 		return nil, err
 	}
-	return b.Doc.Extrude(s, s.Profiles()[0], decad.Distance{D: units.Millimeters(100), Dir: decad.Along})
+	return decad.Extrude(ctx, b.Doc, s, s.Profiles()[0], decad.Distance{D: units.Millimeters(100), Dir: decad.Along})
 }
 
 // Nail returns a 30 x 30 x 4 mm flange with an 8 x 8 mm stick rising from its

@@ -47,7 +47,7 @@ profile. mtilt does not claim a global optimum or printability.
   point p of the input body lands at `q = R * p + t`.
 - The report stores the transform as `matrix`: the 4x4 homogeneous matrix `[R t; 0 0 0 1]`, row-major, acting on
   column vectors `(x, y, z, 1)` in millimeters. `inverse` is `[R^T, -R^T t; 0 0 0 1]`.
-- The output model is `body.PlacedCopy(transform)`. mtilt never mirrors, scales, deforms or remeshes the model,
+- The output model is `decad.Copy(ctx, body, decad.WithCopyPlacement(transform))`. mtilt never mirrors, scales, deforms or remeshes the model,
   and never merges a support into it. The model and the supports are in the same frame.
 
 ## 3. Tolerances

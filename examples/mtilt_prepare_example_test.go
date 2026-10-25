@@ -34,7 +34,7 @@ func bracket(ctx context.Context, w *sketch.World, doc *decad.Document) (*decad.
 	if _, err := s.Solve(ctx); err != nil {
 		return nil, err
 	}
-	body, err := doc.Extrude(s, s.Profiles()[0], decad.Distance{D: units.Millimeters(20), Dir: decad.Along})
+	body, err := decad.Extrude(ctx, doc, s, s.Profiles()[0], decad.Distance{D: units.Millimeters(20), Dir: decad.Along})
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func bracket(ctx context.Context, w *sketch.World, doc *decad.Document) (*decad.
 	if err != nil {
 		return nil, err
 	}
-	return body.Placed(ctx, stand)
+	return decad.Transform(ctx, body, stand)
 }
 
 func Example_mtilt_prepare() {

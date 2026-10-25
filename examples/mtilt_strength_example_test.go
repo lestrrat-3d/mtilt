@@ -26,7 +26,7 @@ func Example_mtilt_strength() {
 		fmt.Printf("failed to solve: %s\n", err)
 		return
 	}
-	rod, err := decad.New().Extrude(s, s.Profiles()[0], decad.Distance{D: units.Millimeters(100), Dir: decad.Along})
+	rod, err := decad.Extrude(ctx, decad.New(), s, s.Profiles()[0], decad.Distance{D: units.Millimeters(100), Dir: decad.Along})
 	if err != nil {
 		fmt.Printf("failed to extrude: %s\n", err)
 		return
