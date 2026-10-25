@@ -33,6 +33,13 @@ wider than about 4 extrusion widths get a bore, so the slicer prints them hollow
 branches stay solid. This waits on decad: a tree has to become one body, which needs chained unions of curved
 bodies, a tapered tube along a polyline, or a body from a closed mesh (`../decad/.tmp/mtilt-handoff/README.md`).
 
+## 6. Blades for more strips
+
+Blades (design section 7.8) hold a strip only when blades cover all of it; a strip with one blade that fits nowhere
+falls back to pillars entirely. Keep the blades that fit and give only the uncovered part pillars. Accept bent or
+curved strips (an L-shaped rib, an arc) by splitting a region into straight pieces. Let the search's support
+estimate (section 5.2) count blades, so it stops overestimating strips.
+
 ## Out of scope until requested
 
 Supports rooted on the model (decided against: supports stand on the build plate only), G-code generation, printer control, a GUI, network services, GPU acceleration, automatic mesh repair, model

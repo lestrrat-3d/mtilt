@@ -186,6 +186,62 @@ func (ix *index) lowestOverAbove(x, y, half, zFloor float64) float64 {
 	return best
 }
 
+// lowestOverPoly returns the lowest Z of the part of the model at or above
+// zFloor whose XY projection falls inside the convex polygon poly (corners
+// counter-clockwise, at least three), or +Inf when no part does. Like
+// lowestOver, it is exact for planar triangles.
+func (ix *index) lowestOverPoly(poly [][2]float64, zFloor float64) float64 {
+	x0, y0, x1, y1 := math.Inf(1), math.Inf(1), math.Inf(-1), math.Inf(-1)
+	for _, p := range poly {
+		x0, y0 = math.Min(x0, p[0]), math.Min(y0, p[1])
+		x1, y1 = math.Max(x1, p[0]), math.Max(y1, p[1])
+	}
+	best := math.Inf(1)
+	ix.query(x0, y0, x1, y1, func(i int) bool {
+		bb := ix.boxes[i]
+		if bb.Max.Z < zFloor || bb.Min.Z >= best {
+			return true
+		}
+		clipped := clipToConvex(ix.tris[i][:], poly)
+		if !math.IsInf(zFloor, -1) {
+			clipped = clipAbove(clipped, zFloor)
+		}
+		for _, v := range clipped {
+			best = math.Min(best, v.Z)
+		}
+		return true
+	})
+	return best
+}
+
+// clipToConvex clips a polygon against a convex XY polygon whose corners run
+// counter-clockwise, by Sutherland-Hodgman, interpolating Z along cut edges.
+func clipToConvex(poly []r3.Vec, convexXY [][2]float64) []r3.Vec {
+	out := poly
+	for k := range convexXY {
+		if len(out) == 0 {
+			return nil
+		}
+		a, c := convexXY[k], convexXY[(k+1)%len(convexXY)]
+		// Non-negative on the inner (left) side of the edge a -> c.
+		d := func(v r3.Vec) float64 { return (c[0]-a[0])*(v.Y-a[1]) - (c[1]-a[1])*(v.X-a[0]) }
+		in := out
+		out = nil
+		for i := range in {
+			p, q := in[i], in[(i+1)%len(in)]
+			dp, dq := d(p), d(q)
+			if dp >= 0 {
+				out = append(out, p)
+			}
+			if (dp >= 0) != (dq >= 0) {
+				s := dp / (dp - dq)
+				out = append(out, p.Add(q.Sub(p).Scale(s)))
+			}
+		}
+	}
+	return out
+}
+
 // clipAbove clips a polygon to the half-space Z >= z.
 func clipAbove(poly []r3.Vec, z float64) []r3.Vec {
 	var out []r3.Vec

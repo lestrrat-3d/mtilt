@@ -15,9 +15,9 @@ import (
 )
 
 // bracket builds a Γ-shaped bracket: a 10 x 40 mm post with a 30 mm arm at
-// the top, 20 mm deep. The profile is drawn in the XY plane, extruded along
-// Z, and turned so the profile stands in the XZ plane.
-func bracket(ctx context.Context, w *sketch.World, doc *decad.Document) (*decad.Body, error) {
+// the top, depth mm deep. The profile is drawn in the XY plane, extruded
+// along Z, and turned so the profile stands in the XZ plane.
+func bracket(ctx context.Context, w *sketch.World, doc *decad.Document, depth float64) (*decad.Body, error) {
 	s, err := w.CreateSketch(w.XY())
 	if err != nil {
 		return nil, err
@@ -34,11 +34,11 @@ func bracket(ctx context.Context, w *sketch.World, doc *decad.Document) (*decad.
 	if _, err := s.Solve(ctx); err != nil {
 		return nil, err
 	}
-	body, err := decad.Extrude(ctx, doc, s, s.Profiles()[0], decad.Distance{D: units.Millimeters(20), Dir: decad.Along})
+	body, err := decad.Extrude(ctx, doc, s, s.Profiles()[0], decad.Distance{D: units.Millimeters(depth), Dir: decad.Along})
 	if err != nil {
 		return nil, err
 	}
-	stand, err := r3.FromBasis(r3.Basis{EX: r3.NewVec(1, 0, 0), EY: r3.NewVec(0, 0, 1), EZ: r3.NewVec(0, -1, 0)}, r3.NewVec(0, 20, 0))
+	stand, err := r3.FromBasis(r3.Basis{EX: r3.NewVec(1, 0, 0), EY: r3.NewVec(0, 0, 1), EZ: r3.NewVec(0, -1, 0)}, r3.NewVec(0, depth, 0))
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +49,7 @@ func Example_mtilt_prepare() {
 	ctx := context.Background()
 	w := sketch.NewWorld()
 	doc := decad.New()
-	body, err := bracket(ctx, w, doc)
+	body, err := bracket(ctx, w, doc, 20)
 	if err != nil {
 		fmt.Printf("failed to build bracket: %s\n", err)
 		return

@@ -87,9 +87,11 @@ Local `golangci-lint` version MUST match CI's before trusting a clean local run.
 - Supports: round pillars from the plate to demand reachable straight from below; branches (one mitred decad sweep
   each, foot beside the obstruction, lean ≤ `max_branch_lean_deg`) for demand above other model geometry, merged
   into trees (one body: trunk sweep ∪ member sweeps, ≤ 14 members, knees apart, sealed bore when wide). NEVER
-  root a support on the model. Unreachable, too-low or too-narrow demand → uncovered → candidate fails. Surfaces within `plate_anchor_height_mm` of the plate need no
-  support. Spans up to `max_bridge_mm` between two walls, and points on top of a wall, need no support. Removal
-  and layer strength unverified.
+  root a support on the model. Long, narrow, flat strips of demand get blades (one extrude each, pillar section,
+  ends + every ≤ `max_bridge_mm`), all-or-nothing per strip, else pillars. Unreachable, too-low or too-narrow
+  demand → uncovered → candidate fails. Surfaces within `plate_anchor_height_mm` of the plate need no
+  support. Spans up to `max_bridge_mm` between two walls or blades, and points on top of a wall, need no support.
+  Removal and layer strength unverified.
 
 ## Conventions
 

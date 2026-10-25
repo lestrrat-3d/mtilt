@@ -267,7 +267,7 @@ func (s *session) addUnchecked() {
 		{Property: "removal_accessibility", Note: "whether each support can be reached and broken away was not analyzed"},
 		{Property: "physical_printability", Note: "no print, slicer run or material test was performed"},
 		{Property: "slicer_interpretation", Note: "slicers can merge, offset or re-interface support bodies; inspect the sliced preview"},
-		{Property: "bridges", Note: "spans up to max_bridge_mm between two walls are left unsupported; whether the printer bridges them cleanly was not tested"},
+		{Property: "bridges", Note: "spans up to max_bridge_mm between two walls, or between a wall or blade and a blade, are left unsupported; whether the printer bridges them cleanly was not tested"},
 		{Property: "stability", Note: "centroid_over_contact_hull is a geometric heuristic, not a physical simulation"},
 		{Property: "layer_strength", Note: "the strength term scores the long axis's angle to the plate; no load or layer-adhesion analysis was run"},
 	}
@@ -302,7 +302,8 @@ func (s *session) planningParams() support.Params {
 //
 // For the selected candidate only, Prepare adds bodies to body's document:
 // the moved model (body.PlacedCopy; body itself stays live and unchanged)
-// and one revolved pillar per support. It then runs decad's Verify and
+// and one body per support: a revolved pillar, a swept branch, a tree, or
+// an extruded blade. It then runs decad's Verify and
 // requires that no two of these bodies interfere and that each is a valid
 // solid, and re-checks the pillars' gaps and spacing on their own
 // tessellations.
@@ -352,7 +353,7 @@ func Prepare(ctx context.Context, body *decad.Body, opts Options) (*Result, erro
 		cost := s.plannedCost(plan)
 		cr.Planned = &cost
 		cr.Attempt.Status = AttemptSucceeded
-		if len(plan.Pillars) == 0 {
+		if plan.Supports() == 0 {
 			cr.Attempt.Status = AttemptNotNeeded
 		}
 		if best < 0 || orient.Less(s.entry(cr, cr.Planned.Score), s.entry(&s.report.Candidates[best], s.report.Candidates[best].Planned.Score)) {
@@ -388,7 +389,7 @@ func (s *session) firstLayerOK(cr *CandidateReport) bool {
 // total contact area, priced like the estimate.
 func (s *session) plannedCost(plan *support.Plan) orient.Cost {
 	p := s.opts.Profile.supportParams()
-	return orient.NewCost(p.PlanVolume(plan), float64(len(plan.Pillars))*p.ContactArea(), s.opts.CostWeights, s.scale)
+	return orient.NewCost(p.PlanVolume(plan), p.PlanContactArea(plan), s.opts.CostWeights, s.scale)
 }
 
 // errAttemptFailed is returned by attempt when a candidate's supports fail;
@@ -412,7 +413,7 @@ func (s *session) attempt(ctx context.Context, id int, params support.Params, li
 	}
 	cr.Attempt.Samples = plan.Samples
 	cr.Attempt.BridgedSamples, cr.Attempt.HeldSamples = plan.Bridged, plan.Held
-	cr.Attempt.Supports = len(plan.Pillars)
+	cr.Attempt.Supports = plan.Supports()
 	if n := len(plan.Uncovered); n > 0 {
 		cr.Attempt.UncoveredCount = n
 		cr.Attempt.Uncovered = plan.Uncovered[:min(n, maxUncoveredListed)]
@@ -427,6 +428,9 @@ func (s *session) attempt(ctx context.Context, id int, params support.Params, li
 	half := s.opts.Profile.BaseWidthMM / 2
 	for _, pl := range plan.Pillars {
 		all = all.Union(mesh.Box{Min: r3.NewVec(pl.X-half, pl.Y-half, 0), Max: r3.NewVec(pl.X+half, pl.Y+half, pl.TopZ)})
+	}
+	for _, bl := range plan.Blades {
+		all = all.Union(params.BladeBounds(bl))
 	}
 	if s.fit(all) == fitExceeds {
 		return failed("model plus supports exceed the build volume")
@@ -458,13 +462,19 @@ func (s *session) build(ctx context.Context, id int, plan *support.Plan) (*Resul
 	for i := range plan.Trees {
 		bodies = append(bodies, supportBody{tree: &plan.Trees[i], tips: plan.Members(i + 1)})
 	}
+	for i := range plan.Blades {
+		bodies = append(bodies, supportBody{blade: &plan.Blades[i]})
+	}
 	upright := make([]bool, len(bodies))
 	for i, sb := range bodies {
 		var pb *decad.Body
 		var err error
-		if sb.tree != nil {
+		switch {
+		case sb.blade != nil:
+			pb, err = params.BladeBody(ctx, w, s.body.Document(), *sb.blade)
+		case sb.tree != nil:
 			pb, err = params.TreeBody(ctx, w, s.body.Document(), *sb.tree, sb.tips)
-		} else {
+		default:
 			pb, err = params.Body(ctx, w, s.body.Document(), sb.tips[0])
 		}
 		if err != nil {
@@ -472,7 +482,7 @@ func (s *session) build(ctx context.Context, id int, plan *support.Plan) (*Resul
 			return nil, fmt.Errorf("mtilt: building support body: %w", err)
 		}
 		res.Supports = append(res.Supports, pb)
-		upright[i] = sb.tree == nil && !sb.tips[0].IsBranch()
+		upright[i] = sb.blade == nil && sb.tree == nil && !sb.tips[0].IsBranch()
 	}
 
 	checks, err := s.verifyAssembly(ctx, res, upright)
@@ -488,7 +498,7 @@ func (s *session) build(ctx context.Context, id int, plan *support.Plan) (*Resul
 	}
 
 	cr.Attempt.Status = AttemptSucceeded
-	if len(plan.Pillars) == 0 {
+	if plan.Supports() == 0 {
 		cr.Attempt.Status = AttemptNotNeeded
 	}
 	rep.Selected = &cr.ID
@@ -501,30 +511,8 @@ func (s *session) build(ctx context.Context, id int, plan *support.Plan) (*Resul
 	}
 	rep.Model = &ModelReport{BoundsMM: boxArray(mesh.Box{Min: mb.Min, Max: mb.Max}), VolumeMM3: rep.Input.VolumeMM3}
 	for i, sb := range bodies {
-		pl := sb.tips[0]
-		sr := SupportReport{
-			ID:         fmt.Sprintf("support-%04d", i+1),
-			CenterMM:   [2]float64{pl.X, pl.Y},
-			Kind:       "pillar",
-			SurfaceZMM: pl.SurfaceZ,
-			TopZMM:     pl.TopZ,
-			Origin:     string(pl.Origin),
-		}
-		switch {
-		case sb.tree != nil:
-			sr.Kind = "tree"
-			foot := [2]float64{sb.tree.FootX, sb.tree.FootY}
-			top := sb.tree.TopZ
-			sr.FootMM, sr.KneeZMM = &foot, &top
-			for _, m := range sb.tips {
-				sr.TipsMM = append(sr.TipsMM, [3]float64{m.X, m.Y, m.TopZ})
-			}
-		case pl.IsBranch():
-			sr.Kind = "branch"
-			foot := [2]float64{pl.FootX, pl.FootY}
-			knee := pl.KneeZ
-			sr.FootMM, sr.KneeZMM = &foot, &knee
-		}
+		sr := sb.report()
+		sr.ID = fmt.Sprintf("support-%04d", i+1)
 		if vol, err := res.Supports[i].Volume(); err == nil {
 			sr.VolumeMM3, _ = vol.Value.In(units.CubicMillimeter)
 		}
@@ -533,7 +521,7 @@ func (s *session) build(ctx context.Context, id int, plan *support.Plan) (*Resul
 		}
 		rep.Supports = append(rep.Supports, sr)
 	}
-	if len(plan.Pillars) > 0 {
+	if plan.Supports() > 0 {
 		s.warnf("support geometry passed mtilt's and decad's geometric checks only; breakaway behavior depends on the printer, material and slicer and has not been tested")
 	}
 	res.Report = *rep
@@ -552,10 +540,47 @@ func (s *session) build(ctx context.Context, id int, plan *support.Plan) (*Resul
 }
 
 // supportBody is one support body to build: a straight pillar or single
-// branch (tree nil, one tip), or a tree and its members.
+// branch (tree and blade nil, one tip), a tree and its members, or a blade.
 type supportBody struct {
-	tree *support.Tree
-	tips []support.Pillar
+	tree  *support.Tree
+	tips  []support.Pillar
+	blade *support.Blade
+}
+
+// report describes the planned support; the caller adds its ID and decad's
+// measurements of the built body.
+func (sb supportBody) report() SupportReport {
+	if bl := sb.blade; bl != nil {
+		axis, length := [2]float64{bl.AxisX, bl.AxisY}, bl.LengthMM
+		return SupportReport{
+			Kind: "blade", CenterMM: [2]float64{bl.X, bl.Y}, SurfaceZMM: bl.SurfaceZ, TopZMM: bl.TopZ,
+			Origin: string(support.OriginBlade), Axis: &axis, LengthMM: &length,
+		}
+	}
+	pl := sb.tips[0]
+	sr := SupportReport{
+		CenterMM:   [2]float64{pl.X, pl.Y},
+		Kind:       "pillar",
+		SurfaceZMM: pl.SurfaceZ,
+		TopZMM:     pl.TopZ,
+		Origin:     string(pl.Origin),
+	}
+	switch {
+	case sb.tree != nil:
+		sr.Kind = "tree"
+		foot := [2]float64{sb.tree.FootX, sb.tree.FootY}
+		top := sb.tree.TopZ
+		sr.FootMM, sr.KneeZMM = &foot, &top
+		for _, m := range sb.tips {
+			sr.TipsMM = append(sr.TipsMM, [3]float64{m.X, m.Y, m.TopZ})
+		}
+	case pl.IsBranch():
+		sr.Kind = "branch"
+		foot := [2]float64{pl.FootX, pl.FootY}
+		knee := pl.KneeZ
+		sr.FootMM, sr.KneeZMM = &foot, &knee
+	}
+	return sr
 }
 
 // remove takes every body Prepare added for res out of the document again
