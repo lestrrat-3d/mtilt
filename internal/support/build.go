@@ -56,12 +56,21 @@ type Plan struct {
 	// Trees are the trunks tree members leave (see tree.go); a member's
 	// Pillar.Tree is its 1-based index here.
 	Trees []Tree
+	// Blades are the walls placed across straight strips of demand (see
+	// blade.go), in placement order: strip by strip, along each strip.
+	Blades []Blade
 	// Uncovered lists the samples no pillar covers, sorted by Y, X, Z.
 	// A plan with any uncovered sample must not be used.
 	Uncovered []Sample
 
 	samples []r3.Vec
+	// tilts holds each sample's surface tilt from horizontal, in degrees.
+	tilts []float64
 }
+
+// Supports returns the number of supports the plan places: straight
+// pillars, branches (each tree member counted once) and blades.
+func (plan *Plan) Supports() int { return len(plan.Pillars) + len(plan.Blades) }
 
 // Grid resolutions, as steps per support spacing. See Build.
 const (
@@ -93,10 +102,15 @@ const slackFactor = 4
 // keeps a pillar under one surface from counting for another surface
 // stacked above it.
 //
-// Pillar positions come from three passes. Samples are visited in Y, X, Z
-// order, and "nearby positions" are the points of a SpacingMM/16 grid
-// anchored at the origin within SpacingMM of a sample, nearest first (ties
-// by Y, then X).
+// Blades come first (see bladePass): each straight strip of demand gets
+// blades that hold or bridge all of its samples, or none. Samples the
+// blades hold or bridge take no pillar, and grid nodes under a strip that
+// kept its blades are skipped.
+//
+// Pillar positions then come from three passes over the remaining samples.
+// Samples are visited in Y, X, Z order, and "nearby positions" are the
+// points of a SpacingMM/16 grid anchored at the origin within SpacingMM of a
+// sample, nearest first (ties by Y, then X).
 //
 //  1. Edge: each uncovered sample whose own position the model rules out
 //     (occluded, too low, or a clearance collision; typically next to a
@@ -120,6 +134,7 @@ const slackFactor = 4
 func Build(ctx context.Context, placed *mesh.Mesh, p Params, lim Limits, tol mesh.Tolerance) (*Plan, error) {
 	b := &builder{
 		ix:    newIndex(placed),
+		tris:  placed.Triangles,
 		p:     p,
 		lim:   lim,
 		eps:   tol.Length,
@@ -139,24 +154,44 @@ func Build(ctx context.Context, placed *mesh.Mesh, p Params, lim Limits, tol mes
 		return plan, nil
 	}
 
-	samples, bridged, held, err := b.samples(ctx)
+	samples, sampleTri, bridged, held, err := b.samples(ctx)
 	if err != nil {
 		return nil, err
 	}
 	plan.samples = samples
+	plan.tilts = make([]float64, len(samples))
+	for i, ti := range sampleTri {
+		plan.tilts[i] = b.tiltOf(ti)
+	}
 	plan.Samples = len(samples)
 	plan.Bridged, plan.Held = bridged, held
 	if len(samples) == 0 {
 		return plan, nil
 	}
 
-	if err := b.edgePass(ctx, samples); err != nil {
+	byBlades, err := b.bladePass(ctx, samples, sampleTri)
+	if err != nil {
 		return nil, err
 	}
-	if err := b.gridPass(ctx, samples); err != nil {
+	plan.Blades = slices.Clone(b.blades)
+	// Samples the blades hold or bridge need no pillar.
+	rest := make([]r3.Vec, 0, len(samples))
+	for i, s := range samples {
+		if !byBlades[i] {
+			rest = append(rest, s)
+		}
+	}
+	if len(rest) == 0 {
+		return plan, nil
+	}
+
+	if err := b.edgePass(ctx, rest); err != nil {
 		return nil, err
 	}
-	uncovered, err := b.fillPass(ctx, samples)
+	if err := b.gridPass(ctx, rest); err != nil {
+		return nil, err
+	}
+	uncovered, err := b.fillPass(ctx, rest)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +221,10 @@ func (plan *Plan) Members(id int) []Pillar {
 }
 
 type builder struct {
-	ix    *index
+	ix *index
+	// tris are the placed mesh's indexed triangles, for region
+	// connectivity (see regions).
+	tris  [][3]uint32
 	p     Params
 	lim   Limits
 	eps   float64
@@ -196,6 +234,11 @@ type builder struct {
 
 	pillars []Pillar
 	trees   []Tree
+	blades  []Blade
+	// stripOf holds, for each triangle, the 1-based strip it belongs to
+	// (0: none), and bladed the strips whose blades were kept.
+	stripOf []int
+	bladed  map[int]struct{}
 	// cells buckets pillar indices by SpacingMM grid cell for coverage
 	// and crowding lookups.
 	cells map[[2]int64][]int
@@ -230,7 +273,7 @@ func (b *builder) covered(s r3.Vec) bool {
 }
 
 func (b *builder) add(pl Pillar) error {
-	if len(b.pillars) == b.lim.MaxSupports {
+	if len(b.pillars)+len(b.blades) == b.lim.MaxSupports {
 		return fmt.Errorf("%w: more than %d supports needed", ErrLimit, b.lim.MaxSupports)
 	}
 	b.pillars = append(b.pillars, pl)
@@ -239,12 +282,20 @@ func (b *builder) add(pl Pillar) error {
 	return nil
 }
 
-func (b *builder) samples(ctx context.Context) ([]r3.Vec, int, int, error) {
+// samples returns the demand samples sorted by Y, X, Z, the triangle that
+// produced each one first, and the counts of bridged and wall-held samples
+// left out.
+func (b *builder) samples(ctx context.Context) ([]r3.Vec, []int, int, int, error) {
 	q := b.p.SpacingMM / sampleDivisions
 	seen := make(map[r3.Vec]struct{})
-	var out []r3.Vec
+	type sample struct {
+		v   r3.Vec
+		tri int
+	}
+	var out []sample
 	bridged, held := 0, 0
 	var tilt float64
+	var tri int
 	push := func(v r3.Vec) error {
 		// A demand triangle can reach below the plate-anchor height; the
 		// part of it down there is anchored, not demand.
@@ -267,7 +318,7 @@ func (b *builder) samples(ctx context.Context) ([]r3.Vec, int, int, error) {
 		if len(out) == b.lim.MaxSamples {
 			return fmt.Errorf("%w: more than %d support-demand samples", ErrLimit, b.lim.MaxSamples)
 		}
-		out = append(out, v)
+		out = append(out, sample{v, tri})
 		return nil
 	}
 	for i, t := range b.ix.tris {
@@ -275,13 +326,12 @@ func (b *builder) samples(ctx context.Context) ([]r3.Vec, int, int, error) {
 			continue
 		}
 		if err := ctx.Err(); err != nil {
-			return nil, 0, 0, err
+			return nil, nil, 0, 0, err
 		}
-		n, _ := mesh.TriangleNormal(t)
-		tilt = overhang.Angle(n)
+		tilt, tri = b.tiltOf(i), i
 		for _, v := range t {
 			if err := push(v); err != nil {
-				return nil, 0, 0, err
+				return nil, nil, 0, 0, err
 			}
 		}
 		bb := b.ix.boxes[i]
@@ -293,15 +343,19 @@ func (b *builder) samples(ctx context.Context) ([]r3.Vec, int, int, error) {
 					continue
 				}
 				if err := push(r3.NewVec(x, y, z)); err != nil {
-					return nil, 0, 0, err
+					return nil, nil, 0, 0, err
 				}
 			}
 		}
 	}
-	slices.SortFunc(out, func(a, c r3.Vec) int {
-		return cmp.Or(cmp.Compare(a.Y, c.Y), cmp.Compare(a.X, c.X), cmp.Compare(a.Z, c.Z))
+	slices.SortFunc(out, func(a, c sample) int {
+		return cmp.Or(cmp.Compare(a.v.Y, c.v.Y), cmp.Compare(a.v.X, c.v.X), cmp.Compare(a.v.Z, c.v.Z))
 	})
-	return out, bridged, held, nil
+	vs, tris := make([]r3.Vec, len(out)), make([]int, len(out))
+	for i, s := range out {
+		vs[i], tris[i] = s.v, s.tri
+	}
+	return vs, tris, bridged, held, nil
 }
 
 // accept decides whether a pillar can stand at (x, y). It returns the pillar
@@ -331,12 +385,19 @@ func (b *builder) accept(x, y float64, origin Origin) (Pillar, string) {
 }
 
 // crowded reports whether pl's base square would touch or overlap an
-// accepted pillar's base square.
+// accepted pillar's base square or an accepted blade.
 func (b *builder) crowded(pl Pillar) bool {
 	w := b.p.BaseWidthMM + b.eps
-	return b.nearby(pl.X, pl.Y, func(o Pillar) bool {
+	if b.nearby(pl.X, pl.Y, func(o Pillar) bool {
 		return math.Abs(o.X-pl.X) < w && math.Abs(o.Y-pl.Y) < w
-	})
+	}) {
+		return true
+	}
+	if len(b.blades) == 0 {
+		return false
+	}
+	half := b.p.BaseWidthMM / 2
+	return b.bladeTouches(frustum(pl.X, pl.Y, 0, half, b.p.BaseThicknessMM, half))
 }
 
 func (b *builder) gridPass(ctx context.Context, samples []r3.Vec) error {
@@ -351,6 +412,13 @@ func (b *builder) gridPass(ctx context.Context, samples []r3.Vec) error {
 			return err
 		}
 		for gx := math.Ceil(lo.X / sp); gx*sp <= hi.X; gx++ {
+			// A node under a strip that kept its blades is left out: the
+			// blades cover that strip.
+			if _, tri, ok := b.ix.lowestHit(gx*sp, gy*sp, 0, b.eps); ok && b.stripOf[tri] > 0 {
+				if _, bladed := b.bladed[b.stripOf[tri]]; bladed {
+					continue
+				}
+			}
 			pl, reason := b.accept(gx*sp, gy*sp, OriginGrid)
 			if reason != "" {
 				continue

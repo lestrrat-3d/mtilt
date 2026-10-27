@@ -4,8 +4,8 @@ Automatic orientation and breakaway support generation for FDM printing of [deca
 bodies.
 
 mtilt (mesh-tilt) takes a solid `*decad.Body`, picks an orientation for printing on a single-material FDM printer,
-and builds separate support pillars as decad bodies in the same document: round pillars standing on the build
-plate under the part's overhangs. You export the moved model and the supports with decad's exporters and import
+and builds separate supports as decad bodies in the same document, all standing on the build plate: round pillars
+under the part's overhangs, branches and trees that lean around the part, and blades across straight strips. You export the moved model and the supports with decad's exporters and import
 them into a slicer.
 
 > **Prototype.** The API, the report layout and the algorithms will change. Every support layout mtilt builds has
@@ -18,9 +18,10 @@ Each image shows a test part as given (left) and as mtilt prepared it (right): t
 gold, on the build plate. `cd _gallery && go run .` regenerates them.
 
 The nail stands 104 mm tall on a small flange. Standing up, every layer line crosses its length, so mtilt lays it
-down; within the 15 degree tilt limit, a 5 degree tilt needs the fewest supports (47).
+down; within the 15 degree tilt limit, a 5 degree tilt needs the least support. The stick's underside is then a
+straight strip, so 10 blades hold it, with 9 mm bridges between them.
 
-![A nail standing on its flange, then lying almost flat on 47 gold pillars](docs/images/nail.png)
+![A nail standing on its flange, then lying almost flat on 10 gold blades](docs/images/nail.png)
 
 The oblique cuboid is turned onto its largest face and needs no supports.
 
@@ -42,6 +43,11 @@ beside the base and branch in under it: 39 tips on 24 bodies.
 
 ![A C-shaped part whose top arm is held by gold trees that branch in from beside its base](docs/images/occluded-kept.png)
 
+The same bracket only 4 mm deep, kept upright, has an arm whose underside is a 30 x 4 mm strip. The post holds one
+end; three blades across the arm leave spans of 9 mm, under the 10 mm `max_bridge_mm`.
+
+![A narrow bracket whose arm is held by three gold blades](docs/images/narrow-bracket-kept.png)
+
 ## What it does now
 
 - Takes one connected solid decad body (millimeters, +Z up, plate at Z = 0). It refuses a body that is not a
@@ -58,13 +64,16 @@ beside the base and branch in under it: 39 tips on 24 bodies.
   holds.
 - Leaves short spans between two walls unsupported (up to `max_bridge_mm`, 10 mm in the example profile), because
   the printer draws them in the air, and leaves points that sit on top of a wall to that wall.
-- For the selected candidate only, adds the moved model (`PlacedCopy`; the input stays live) and one revolved
-  pillar body per support to the input's document. It then runs decad's `Verify`, requires that none of these
+- For the selected candidate only, adds the moved model (`PlacedCopy`; the input stays live) and one body per
+  support to the input's document. It then runs decad's `Verify`, requires that none of these
   bodies interfere and that each is a valid solid, and re-checks the pillars on their tessellations.
 - Reaches an overhang above another part of the model with a **branch**: a support whose foot stands beside that
   part on the plate and which leans in, at most `max_branch_lean_deg` (40 degrees in the example profile), to the
   overhang. Nearby branches merge into a shared trunk, so one body (a tree) holds several tips; each tree is one
   decad body, and trunks wide enough get a sealed bore so they print hollow.
+- Holds a long, narrow, flat strip of overhang (a rib or a narrow arm, at most two support spacings wide) with
+  **blades**: thin walls across the strip, standing on the plate, at its free ends and every `max_bridge_mm` along
+  it, so the slicer can bridge the spans between them. A strip where a blade does not fit gets pillars instead.
 - Fails with a reason, and adds no bodies, when no candidate can be supported. If decad's final check fails after
   the bodies were built, mtilt removes them from the document again.
 
@@ -84,6 +93,8 @@ The executable examples are the usage documentation; `go test ./examples/` runs 
 - [`examples/mtilt_prepare_example_test.go`](examples/mtilt_prepare_example_test.go) builds a Γ-shaped bracket,
   keeps it upright so its arm needs 41 pillars, and writes the model and every pillar as STL with
   `decad/export`.
+- [`examples/mtilt_blades_example_test.go`](examples/mtilt_blades_example_test.go) prepares the same bracket only
+  4 mm deep and prints the three blades that hold its arm.
 - [`examples/mtilt_strength_example_test.go`](examples/mtilt_strength_example_test.go) gives mtilt a round rod
   standing on its end and shows it laid down, because standing breaks the tilt limit.
 

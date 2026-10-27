@@ -22,18 +22,19 @@ mtilt runs one pipeline on a decad body:
 
 ```
 body -> check and tessellate -> evaluate orientations -> plan supports on the mesh
-     -> build model copy and pillar bodies -> decad Verify + mesh re-checks -> report
+     -> build model copy and support bodies -> decad Verify + mesh re-checks -> report
 ```
 
 Implemented:
 
 - Input: one solid `*decad.Body` with one lump.
 - Single-material FDM with removable supports.
-- One support strategy: separate round pillars rooted on the build plate, each a decad body (section 7).
+- Separate supports rooted on the build plate, each a decad body (section 7): round pillars, branches and trees
+  that lean around the model, and blades across straight strips of overhang.
 
 Not implemented, and not stubbed: file input or output (decad's exporters write files; STL import into decad is
-planned in decad), G-code, printer control, a GUI, network services, GPU work, mesh repair, model splitting, tree
-supports, supports rooted on the model, soluble or resin supports, load or layer-adhesion
+planned in decad), G-code, printer control, a GUI, network services, GPU work, mesh repair, model splitting,
+supports rooted on the model, soluble or resin supports, load or layer-adhesion
 simulation, slicer profiles. [roadmap.md](roadmap.md) orders them.
 
 "Best" in mtilt always means best among the evaluated orientations under the rules in section 5 and the given
@@ -128,8 +129,9 @@ it down to the plate. A triangle with any vertex lower than the shortest pillar 
 the tessellation bound) adds to `too_low_mm2`; no pillar fits there. The column ignores anything of the model
 between the triangle and the plate, so occluded demand is found only by planning.
 
-The **planned cost** is measured on the pillars the planner places: their summed analytic volume and their summed
-round contact areas, priced with the same formula.
+The **planned cost** is measured on the supports the planner places: their summed analytic volume and their summed
+top-face areas (one round contact per pillar or branch tip, `contact_width_mm` times the length of each blade),
+priced with the same formula.
 
 ### 5.3 First layer
 
@@ -205,8 +207,9 @@ along one of 8 horizontal lines through it spread over half a turn (`internal/su
 | held | the cross-section passes within the length tolerance of the sample: it sits on top of a wall |
 | bridged | the surface is tilted at most `bridge_max_tilt_deg` from horizontal, and the cross-section lies on both sides of the sample with at most `max_bridge_mm` of air between them |
 
-`max_bridge_mm = 0` turns both off. The example profile uses 10 mm and 5 degrees; neither is a measured value. A
-cantilever (one wall) is never a bridge. The search's support estimate (section 5.2) does not apply this rule, so it
+`max_bridge_mm = 0` turns both off, and with them blades (section 7.8), which build the walls for such spans
+under straight strips. The example profile uses 10 mm and 5 degrees; neither is a measured value. A cantilever
+(one wall) is never a bridge. The search's support estimate (section 5.2) does not apply this rule, so it
 overestimates support for parts with bridges; the planned cost does apply it. The report counts both kinds per
 candidate (`bridged_samples`, `wall_held_samples`).
 
@@ -215,9 +218,10 @@ candidate (`bridged_samples`, `wall_held_samples`).
 ### 7.1 Geometry class
 
 Every support stands on the build plate; none roots on the model. A straight pillar holds demand that a vertical
-line from the plate meets before any other part of the model. A **branch** (section 7.7) holds demand that has
-model geometry below it: its foot stands elsewhere on the plate, and it leans in, at most `max_branch_lean_deg` from
-vertical, around that geometry. Demand that neither can reach, demand too close to the plate for the shortest
+line from the plate meets before any other part of the model. A **blade** (section 7.8) is a wall across a long,
+narrow, flat strip of such demand; blades turn the strip into short bridges. A **branch** (section 7.7) holds
+demand that has model geometry below it: its foot stands elsewhere on the plate, and it leans in, at most
+`max_branch_lean_deg` from vertical, around that geometry. Demand that neither can reach, demand too close to the plate for the shortest
 support, and demand in gaps narrower than a support's clearance zone are reported as uncovered, and the candidate
 fails. mtilt never routes a support through the model, never starts one in mid-air, and never drops demand it
 cannot cover.
@@ -257,20 +261,25 @@ leaving out samples at or below the anchor height and samples that are bridged o
 hypot(x - px, y - py) <= support_spacing_mm  and  |z - sz| <= support_spacing_mm * max(1, tan(threshold))
 ```
 
+Blades cover samples by their own rule (section 7.8).
+
 ### 7.4 Placement passes
 
 Samples are visited in Y, X, Z order. "Nearby positions" of a sample are the points of a `support_spacing_mm / 16`
 grid within `support_spacing_mm` of it, nearest first.
 
+0. **Blades.** Each straight strip gets blades that cover all of its samples, or none (section 7.8). The passes
+   below skip the samples blades cover.
 1. **Edge.** A sample whose own position the model rules out (occluded, too low, or a clearance collision;
    usually beside a wall) gets the first accepted nearby position that covers it.
-2. **Grid.** Every node of a `support_spacing_mm` grid anchored at the origin, inside the samples' bounding box.
+2. **Grid.** Every node of a `support_spacing_mm` grid anchored at the origin, inside the samples' bounding box,
+   except nodes under a strip that kept its blades.
 3. **Fill.** Each sample still uncovered tries its own position, then its nearby positions.
 4. **Branch.** Each sample still uncovered gets a branch when one fits (section 7.7).
 
 A position is accepted when the vertical line through it meets a demand triangle first; the model's lowest point
 over the contact square leaves room for base, tip and gap; no clearance zone touches the model; and its base square
-is apart from every accepted base square.
+is apart from every accepted base square and every blade.
 
 ### 7.5 Clearance zones
 
@@ -287,7 +296,8 @@ triangle lies entirely outside the model.
 ### 7.6 Support-to-support
 
 Bases must not touch or overlap. The profile requires `base_width_mm < support_spacing_mm`, so grid pillars never
-collide; every other pillar is placed only when its base square is apart from every accepted one.
+collide; every other pillar is placed only when its base square is apart from every accepted one and from every
+blade. A blade is placed only when its base, wall and tip touch no accepted support.
 
 ### 7.7 Branches
 
@@ -340,10 +350,70 @@ extrusion widths thick, from 1 mm above the base to a branch radius plus 1 mm be
 long. The bore makes the trunk print hollow; its inner shell makes the body's mesh two components, so the "one
 solid" check for supports is decad's lump count (`decad_support_lumps`).
 
-### 7.8 Verification
+### 7.8 Blades
 
-On the plan, before any body is built: `RecheckPlan` re-runs the clearance zones and the coverage rule, and the
-model plus pillar footprints are checked against the build volume.
+A **strip** is a demand region that is long, narrow, straight and flat (`internal/support/blade.go`). Demand
+triangles that share a vertex form one region. Each region's **rectangle** is its smallest-area bounding rectangle
+in the plate's plane with one side along an edge of the convex hull of its vertices; the long side is the strip's
+**axis**. With `max_bridge_mm > 0`, a region is a strip when:
+
+| Rule | Example profile |
+|---|---|
+| every triangle is tilted at most `bridge_max_tilt_deg` from horizontal | 5 degrees |
+| the rectangle is at least `pillar_width_mm` and at most 2 x `support_spacing_mm` wide | 2 to 8 mm |
+| the rectangle is longer than 2 x `support_spacing_mm`, and at least 3 times as long as it is wide | over 8 mm |
+| the region's projected area fills at least 90% of the rectangle | |
+
+A region narrower than two spacings is what a single row of pillars covers, and one shorter than two spacings is
+about what the reach of one pillar covers.
+
+A **blade** is a wall standing on the plate across the strip. Along the axis it has a pillar's section (section
+7.2): a base `base_width_mm` thick and `base_thickness_mm` tall, a wall `pillar_width_mm` thick, and a tip that
+narrows to `contact_width_mm` over `tip_height_mm`. Across the axis it is as long as the strip is wide, unless its
+ends were drawn in (below). It is one decad body: the section outline extruded across the strip
+(`support.Params.BladeBody`), so no boolean is involved. Its top face is `top_contact_gap_mm`, plus the
+tessellation bound, plus the numeric slack, below the model's lowest point over that face.
+
+Blades are placed before any pillar (section 7.4), strip by strip in the order of each strip's first sample, from
+the strip's low end along its axis:
+
+1. **Ends.** An end whose last sample has the model's cross-section one layer below it within `max_bridge_mm`
+   along the axis is anchored by that wall and gets no blade. Any other end gets a blade whose top face ends
+   exactly at the last sample; that blade does not move. An end whose samples were left out as plate-anchored
+   (section 6) counts as free.
+2. **Between.** From each anchor, the next blade goes where the remaining length splits into equal spans of at most
+   `max_bridge_mm` between top faces. A blade that does not fit there moves back toward the previous anchor in
+   `support_spacing_mm / 16` steps, as long as a span remains.
+3. **Fit.** At each position the blade first spans the strip's full width. If it does not fit, its ends are drawn in
+   by the same steps: one end, the other, or both, down to `pillar_width_mm` long. It fits when the vertical line
+   through its center meets the strip first; the model's lowest point over its top face is no lower than the
+   strip's tilt allows across that face; there is room for the shortest support (base, tip and gap); its base and
+   wall widened by `side_clearance_mm`, and its tip swept up by the gap, touch no model triangle; and it touches no
+   accepted support.
+
+A strip keeps its blades only when they cover every one of its samples. Otherwise, or when a blade fits nowhere,
+its blades are taken out again and the strip gets pillars from the edge, grid and fill passes, like any other
+demand; samples that pillars cannot cover either are reported as uncovered with their reasons.
+
+**Blade coverage.** Only blades whose held surface is within the coverage rule's height band (section 7.3) of a
+sample count for it:
+
+| Result | Condition |
+|---|---|
+| held | the sample lies over a blade's top face |
+| bridged | the sample's surface is tilted at most `bridge_max_tilt_deg`, and along a blade's axis or across it, the nearest anchors on both sides of the sample are at most `max_bridge_mm` apart, at least one of them a blade's top face; the other anchors are the model's cross-section one layer below the sample |
+
+The rule applies to every sample, so it also covers demand beside a strip that a blade's span reaches. The span
+"across" a blade covers the gap between a blade whose end was drawn in and the wall beside it. As an example, the
+30 x 4 mm underside of the arm of a 4 mm deep bracket (`fixture.NarrowBracket`) gets three blades with 9 mm spans,
+the post anchoring the inner end, and no pillar.
+
+A blade's volume is its section's area times its length; its contact area is `contact_width_mm` times its length.
+
+### 7.9 Verification
+
+On the plan, before any body is built: `RecheckPlan` re-runs the clearance zones and the coverage rules, and the
+model plus support footprints are checked against the build volume.
 
 After the bodies are built, for the selected candidate only:
 
@@ -355,8 +425,8 @@ After the bodies are built, for the selected candidate only:
 | `tessellated_support_topology` | each support's tessellation passes `mesh.Validate`'s closed, manifold and winding checks (slivers and the component count are left to decad) |
 | `tessellated_support_on_plate` | each pillar's lowest Z is 0 |
 | `tessellated_support_model_contact` | no pillar triangle touches a model triangle |
-| `tessellated_support_top_gap` | the model's lowest point above each top face, over that face, is at least the gap above it |
-| `tessellated_support_separation` | the XY bounding boxes of straight pillars are pairwise disjoint (a branch is checked against other supports while planning, and by `decad_interference`) |
+| `tessellated_support_top_gap` | the model's lowest point above each top face, over that face (the convex hull of the support's highest vertices), is at least the gap above it |
+| `tessellated_support_separation` | the XY bounding boxes of straight pillars are pairwise disjoint (a branch or blade is checked against other supports while planning, and by `decad_interference`) |
 | `proper_rigid_transform` | the transform does not mirror |
 
 The tessellated checks allow the model's and the pillars' tessellation bounds. `Verify` runs over the whole
@@ -364,19 +434,20 @@ document; mtilt keeps only the rows for the assembly's own bodies. It runs witho
 measured about 9.7 s against 0.33 s for a bracket and 35 pillars, because it measures every pair; the gaps and
 clearances come from the mesh checks above.
 
-### 7.9 What is not verified
+### 7.10 What is not verified
 
 - Removal: mtilt does not check that a support can be reached or broken away.
 - Physical behavior: no support has been printed, sliced or tested by mtilt.
-- Stability under print forces, layer strength under load, whether a bridge prints cleanly at `max_bridge_mm`, and
-  self-intersection.
+- Stability under print forces (including whether a tall, thin blade stands), layer strength under load, whether a
+  bridge prints cleanly at `max_bridge_mm` between walls or blades, and self-intersection.
 
 The report lists these under `unchecked`.
 
 ## 8. Result and the document
 
-`Prepare` returns the moved model, the support bodies (numbered by Y, then X, of their tip), the transform and the
-report. The input body stays live and unchanged. mtilt adds bodies only after a plan has passed every planning
+`Prepare` returns the moved model, the support bodies, the transform and the report. The support bodies are
+numbered in this order: straight pillars and single branches by Y, then X, of their tip; then trees; then blades,
+strip by strip along each strip's axis. The input body stays live and unchanged. mtilt adds bodies only after a plan has passed every planning
 check:
 
 - `ErrNoFeasibleCandidate`, `ErrInvalidBody`, `ErrUnsupportedInput`, `ErrLimit`: nothing is added.
@@ -394,13 +465,12 @@ The report holds no timing. Two runs with the same body, options and build give 
 | `sweep_directions` | 2,000 | the sweep's resolution |
 | `max_planar_faces` | 12 | fewer face-down seeds |
 | `max_support_attempts` | 8 | the number of finalists planned |
-| `max_supports` | 5,000 | attempt fails |
+| `max_supports` | 5,000 (pillars, branch tips and blades together) | attempt fails |
 | `max_samples` | 500,000 | attempt fails |
 
 Every long loop checks its `context.Context`. decad's `Verify` time grows with the number of bodies in the
-document. As a dated measurement (2026-10-06, 24-core machine), `Prepare` took about 4 s for the bracket's 41
-pillars, and about 5 s for the nail fixture, which plans 8 finalists and builds 47 pillars; the estimate sweep
-itself took milliseconds.
+document. As a dated measurement (2026-10-26, 24-core machine), `Prepare` took about 0.6 s for the bracket's 41
+pillars, and about 0.06 s for the nail fixture, which plans 8 finalists and builds 10 blades.
 
 ## 10. Package layout
 
@@ -413,7 +483,7 @@ itself took milliseconds.
 | `internal/mesh/` | `Mesh`, `FromBody` (decad tessellation), measurements, inertia, `Tolerance`, `Validate` |
 | `internal/overhang/` | overhang angle and triangle classes |
 | `internal/orient/` | long axis, support-cost estimate, direction search, placement, metrics, ranking |
-| `internal/support/` | XY index, separating-axis tests, pillar geometry and bodies, planning, plan and mesh checks |
+| `internal/support/` | XY index, separating-axis tests, pillar, branch, tree and blade geometry and bodies, planning, plan and mesh checks |
 | `internal/fixture/` | test shapes as triangle soups and as decad bodies |
 | `profiles/example-fdm.json` | illustrative, uncalibrated profile |
 | `examples/` | executable examples |
@@ -423,7 +493,7 @@ itself took milliseconds.
 
 | Module | Use | Reason |
 |---|---|---|
-| `github.com/lestrrat-3d/decad` | input bodies, tessellation, pillar and branch bodies (revolve, mitred sweep), `Verify`, `Remove`, `export` in examples | the lestrrat-3d CAD engine mtilt prepares bodies from |
+| `github.com/lestrrat-3d/decad` | input bodies, tessellation, pillar, branch and blade bodies (revolve, mitred sweep, extrude), `Verify`, `Remove`, `export` in examples | the lestrrat-3d CAD engine mtilt prepares bodies from |
 | `github.com/lestrrat-3d/sketch` | pillar outlines and fixture profiles | decad builds bodies from sketch profiles |
 | `github.com/lestrrat-3d/r3` | `Vec`, `Transform` | the lestrrat-3d vector and rigid-transform library; it rejects non-finite values, keeps rotations orthonormal, and reports reflections |
 | `github.com/lestrrat-3d/units` | lengths passed to and read from decad | decad's quantities are `units.Value` |

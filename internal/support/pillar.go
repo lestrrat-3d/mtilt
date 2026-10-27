@@ -1,7 +1,9 @@
-// Package support plans and checks mtilt's breakaway supports: separate
-// vertical round pillars rooted on the build plate, each one decad body.
-// Planning runs on a tessellation of the placed model; Params.Body turns each
-// planned pillar into a decad body.
+// Package support plans and checks mtilt's breakaway supports, all rooted on
+// the build plate, each one decad body: vertical round pillars, leaning
+// branches and trees (branch.go, tree.go), and blades across straight strips
+// of demand (blade.go). Planning runs on a tessellation of the placed model;
+// Params.Body, Params.TreeBody and Params.BladeBody turn the plan into decad
+// bodies.
 //
 // A pillar, from the plate up:
 //
@@ -93,6 +95,8 @@ const (
 	OriginFill Origin = "fill"
 	// OriginBranch is a branch: its foot stands elsewhere on the plate.
 	OriginBranch Origin = "branch"
+	// OriginBlade is a blade across a straight strip (see Blade).
+	OriginBlade Origin = "blade"
 )
 
 // Pillar is one support pillar, centered on (X, Y).
@@ -229,7 +233,8 @@ func (p Params) Volume(pl Pillar) float64 {
 }
 
 // PlanVolume returns the volume in mm^3 of every support in a plan: each
-// straight pillar and single branch, and each tree with its members.
+// straight pillar and single branch, each tree with its members, and each
+// blade.
 func (p Params) PlanVolume(plan *Plan) float64 {
 	var v float64
 	for _, pl := range plan.Pillars {
@@ -238,6 +243,9 @@ func (p Params) PlanVolume(plan *Plan) float64 {
 	for i, t := range plan.Trees {
 		v += p.treeVolume(t, plan.Members(i+1))
 	}
+	for _, bl := range plan.Blades {
+		v += p.BladeVolume(bl)
+	}
 	return v
 }
 
@@ -245,4 +253,15 @@ func (p Params) PlanVolume(plan *Plan) float64 {
 func (p Params) ContactArea() float64 {
 	r := p.ContactWidthMM / 2
 	return math.Pi * r * r
+}
+
+// PlanContactArea returns the area in mm^2 of every top face in a plan:
+// one round contact per pillar, branch or tree member, and each blade's
+// long one.
+func (p Params) PlanContactArea(plan *Plan) float64 {
+	a := float64(len(plan.Pillars)) * p.ContactArea()
+	for _, bl := range plan.Blades {
+		a += p.BladeContactArea(bl)
+	}
+	return a
 }

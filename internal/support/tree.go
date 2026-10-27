@@ -422,8 +422,9 @@ func (b *builder) leansMeetInsideTrunk(t Tree, m1, m2 Pillar) bool {
 	return !touchesConvex(out(m1), out(m2), b.eps)
 }
 
-// solidsExcept returns the solids of every accepted support except the
-// pillars listed in skip and the tree with id self (0: none).
+// solidsExcept returns the solids of every accepted support, blades
+// included, except the pillars listed in skip and the tree with id self (0:
+// none).
 func (b *builder) solidsExcept(skip []int, self int) []convex {
 	var out []convex
 	for i, o := range b.pillars {
@@ -437,6 +438,9 @@ func (b *builder) solidsExcept(skip []int, self int) []convex {
 			continue
 		}
 		out = append(out, b.p.trunkZones(t, 0)...)
+	}
+	for _, bl := range b.blades {
+		out = append(out, b.p.bladeZones(bl, 0)...)
 	}
 	return out
 }

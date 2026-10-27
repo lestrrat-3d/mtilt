@@ -251,6 +251,35 @@ func TestPrepareBridges(t *testing.T) {
 		require.Zero(t, res.Report.Candidates[0].Attempt.BridgedSamples)
 		require.NotEmpty(t, res.Supports)
 	})
+
+	t.Run("a narrow arm gets blade bodies and no pillars", func(t *testing.T) {
+		body := newBody(t, (*fixture.Bodies).NarrowBracket)
+		res, err := prepare(t, body, mtilt.Options{KeepOrientation: true})
+		require.NoError(t, err)
+		requireNoFailedCheck(t, res.Report)
+		requirePassed(t, res.Report.Validation, "decad_interference")
+		requirePassed(t, res.Report.Validation, "decad_body_validity")
+		requirePassed(t, res.Report.Validation, "tessellated_support_top_gap")
+		require.Len(t, res.Supports, 3)
+		require.Equal(t, 3, selected(res).Attempt.Supports)
+		// The model is centered on the origin: the arm runs from X = -10
+		// to X = 20. Each blade is 4 mm long across the arm, and stops
+		// the top gap under it.
+		for i, sr := range res.Report.Supports {
+			require.Equal(t, "blade", sr.Kind)
+			require.Equal(t, "blade", sr.Origin)
+			require.Equal(t, [2]float64{1, 0}, *sr.Axis)
+			require.InDelta(t, fixture.NarrowDepthMM, *sr.LengthMM, 1e-9)
+			require.InDelta(t, []float64{-0.5, 9.5, 19.5}[i], sr.CenterMM[0], 1e-9)
+			require.InDelta(t, 30-0.2, sr.TopZMM, 1e-3)
+			require.True(t, res.Supports[i].IsSolid())
+			require.Len(t, res.Supports[i].Lumps(), 1)
+			b, err := res.Supports[i].Bounds()
+			require.NoError(t, err)
+			require.InDelta(t, 0, b.Min.Z, 1e-9)
+			require.InDelta(t, sr.TopZMM, b.Max.Z, 1e-9)
+		}
+	})
 }
 
 func TestPrepareStrength(t *testing.T) {

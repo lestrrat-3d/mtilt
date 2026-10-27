@@ -85,6 +85,22 @@ var (
 	occludedProfile = [][2]float64{{0, 0}, {40, 0}, {40, 10}, {10, 10}, {10, 40}, {40, 40}, {40, 50}, {0, 50}}
 )
 
+// NarrowBracket returns the bracket of Bracket only 4 mm deep along Y: in
+// the orientation given, the arm's underside is a 30 x 4 mm horizontal
+// strip at Z = 30, attached to the post at X = 10 and free at X = 40.
+func NarrowBracket() [][3]r3.Vec {
+	return Prism(bracketProfile, 0, NarrowDepthMM)
+}
+
+// NarrowBridge returns the part of Bridge only 4 mm deep along Y: the span's
+// underside is a 30 x 4 mm horizontal strip at Z = 30 between two posts.
+func NarrowBridge() [][3]r3.Vec {
+	return Prism(bridgeProfile, 0, NarrowDepthMM)
+}
+
+// NarrowDepthMM is the depth along Y of NarrowBracket and NarrowBridge.
+const NarrowDepthMM = 4
+
 // Bridge returns a Π-shaped part, 20 mm deep along Y: posts at X 0..10 and
 // X 40..50, joined by a beam at Z 30..40. The beam's underside between the
 // posts is a 30 x 20 mm horizontal span at Z = 30 with nothing below it.

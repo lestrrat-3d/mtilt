@@ -35,12 +35,14 @@ const (
 //     so its single connected body reaches the plate.
 //   - support_model_contact: no support triangle touches a model triangle.
 //   - support_top_gap: the model's lowest point over each support's top
-//     face is at least gap above that face, less allowance.
+//     face (the convex hull of its highest vertices) is at least gap above
+//     that face, less allowance.
 //   - support_separation: the XY bounding boxes of the upright supports
 //     (upright[i] true: straight pillars) are pairwise disjoint. A pillar lies
 //     inside the vertical prism over its XY bounding box, so disjoint boxes
-//     mean disjoint bodies. A leaning branch has no such prism; its distance
-//     from other supports is checked while planning and by decad's Verify.
+//     mean disjoint bodies. A leaning branch has no such prism, and a blade
+//     at an angle to the axes fills little of its box; their distance from
+//     other supports is checked while planning and by decad's Verify.
 func ValidateAssembly(ctx context.Context, model *mesh.Mesh, supports []*mesh.Mesh, upright []bool, gap, allowance float64, tol mesh.Tolerance) ([]mesh.Check, error) {
 	ix := newIndex(model)
 	var topology, plate, contact, topGap []string
@@ -80,18 +82,21 @@ func ValidateAssembly(ctx context.Context, model *mesh.Mesh, supports []*mesh.Me
 			}
 		}
 		top := b.Max.Z
-		x0, y0, x1, y1 := math.Inf(1), math.Inf(1), math.Inf(-1), math.Inf(-1)
+		var face [][2]float64
 		for _, v := range s.Vertices {
 			if v.Z < top-allowance-tol.Length {
 				continue
 			}
-			x0, y0 = math.Min(x0, v.X), math.Min(y0, v.Y)
-			x1, y1 = math.Max(x1, v.X), math.Max(y1, v.Y)
+			face = append(face, [2]float64{v.X, v.Y})
 		}
-		half := math.Max(x1-x0, y1-y0) / 2
-		// Only the model above the top face counts; a branch's top face
-		// can stand over a lower part of the model.
-		above := ix.lowestOverAbove((x0+x1)/2, (y0+y1)/2, half, top-allowance-tol.Length)
+		// The top face is the convex hull of the top vertices: a round
+		// contact or a blade's long, narrow one. Only the model above it
+		// counts; a branch's top face can stand over a lower part of the
+		// model.
+		above := math.Inf(1)
+		if hull := convexHull(face); len(hull) >= 3 {
+			above = ix.lowestOverPoly(hull, top-allowance-tol.Length)
+		}
 		if above-top < gap-allowance-tol.Length {
 			topGap = append(topGap, fmt.Sprintf("%s: %g mm below the model, needs %g", name, above-top, gap))
 		}
@@ -126,9 +131,9 @@ func ValidateAssembly(ctx context.Context, model *mesh.Mesh, supports []*mesh.Me
 }
 
 // RecheckPlan re-runs the construction-time checks on a finished plan
-// against the placed model: every pillar's clearance zones are clear of the
-// model, and every demand sample is covered under the coverage rule (see
-// Build).
+// against the placed model: every pillar's and blade's clearance zones are
+// clear of the model, and every demand sample is covered under the coverage
+// rule (see Build) or held or bridged by blades (see builder.bladeCovers).
 func RecheckPlan(placed *mesh.Mesh, plan *Plan, p Params, tol mesh.Tolerance) []mesh.Check {
 	b := &builder{
 		ix:    newIndex(placed),
@@ -137,8 +142,17 @@ func RecheckPlan(placed *mesh.Mesh, plan *Plan, p Params, tol mesh.Tolerance) []
 		dzMax: p.SpacingMM * math.Max(1, math.Tan(p.ThresholdDeg*math.Pi/180)),
 		cells: make(map[[2]int64][]int),
 	}
-	b.lim.MaxSupports = len(plan.Pillars)
+	b.lim.MaxSupports = plan.Supports()
 	var zones []string
+	for i, bl := range plan.Blades {
+		for _, z := range p.bladeZones(bl, p.SideClearanceMM) {
+			if ti, hit := b.ix.anyTouching(z, b.eps); hit {
+				zones = append(zones, fmt.Sprintf("blade %d zone touches model triangle %d", i+1, ti))
+				break
+			}
+		}
+	}
+	b.blades = plan.Blades
 	for i, t := range plan.Trees {
 		for _, z := range p.trunkZones(t, p.SideClearanceMM) {
 			if ti, hit := b.ix.anyTouching(z, b.eps); hit {
@@ -157,8 +171,8 @@ func RecheckPlan(placed *mesh.Mesh, plan *Plan, p Params, tol mesh.Tolerance) []
 		_ = b.add(pl)
 	}
 	var gaps []string
-	for _, s := range plan.samples {
-		if !b.covered(s) {
+	for i, s := range plan.samples {
+		if !b.covered(s) && !b.bladeCovers(s, plan.tilts[i]) {
 			gaps = append(gaps, fmt.Sprintf("sample %v", s))
 		}
 	}

@@ -86,6 +86,17 @@ func (b *Bodies) Bracket(ctx context.Context) (*decad.Body, error) {
 	return b.Prism(ctx, bracketProfile, 0, 20)
 }
 
+// NarrowBracket returns the 4 mm deep bracket of the soup builder
+// NarrowBracket.
+func (b *Bodies) NarrowBracket(ctx context.Context) (*decad.Body, error) {
+	return b.Prism(ctx, bracketProfile, 0, NarrowDepthMM)
+}
+
+// NarrowBridge returns the 4 mm deep part of the soup builder NarrowBridge.
+func (b *Bodies) NarrowBridge(ctx context.Context) (*decad.Body, error) {
+	return b.Prism(ctx, bridgeProfile, 0, NarrowDepthMM)
+}
+
 // Bridge returns the Π-shaped part of the soup builder Bridge.
 func (b *Bodies) Bridge(ctx context.Context) (*decad.Body, error) {
 	return b.Prism(ctx, bridgeProfile, 0, 20)

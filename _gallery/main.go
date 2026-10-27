@@ -56,6 +56,7 @@ func shots() []shot {
 		{name: "bracket-kept", body: (*fixture.Bodies).Bracket, opts: keep},
 		{name: "bridge-kept", body: (*fixture.Bodies).Bridge, opts: keep},
 		{name: "occluded-kept", body: (*fixture.Bodies).Occluded, opts: keep},
+		{name: "narrow-bracket-kept", body: (*fixture.Bodies).NarrowBracket, opts: keep},
 	}
 }
 

@@ -17,8 +17,9 @@ actually performed.
 | Bridges | `internal/support` | a 3 mm slot is bridged and its wall tops held, and fails without bridges; a 30 mm span is not a 10 mm bridge but is a 35 mm one; a cantilever is never a bridge; a ceiling sloped over the bridge tilt limit is not a bridge |
 | Branches | `internal/support` | the occluded part's overhang is covered by branches whose feet are off the base and whose leans stay within 40 degrees; no branches when the lean limit is 0; a branch body is one solid with a clean tessellation and close to its frustum volume |
 | Trees | `internal/support` | the occluded part's branches merge into trees of 2–14 members sharing a foot, with knees apart and fewer bodies than tips; a tree is one solid lump, closed and consistently wound, with a second (bore) shell when its trunk is wide; the plan's volume counts each tree once |
+| Blades | `internal/support` | a blade body is one decad solid whose volume is its section area times its length, along X, along Y and at 30 degrees; a 30 x 4 mm cantilever strip gets three blades at the computed positions with 9 mm spans and no pillar; a 30 mm strip between two posts gets two blades and three equal spans; a strip turned 30 degrees gets blades along its axis 10 mm apart; a strip whose end blade collides falls back to pillars with full coverage; no blades without bridges, under a 20 mm wide region or under a 6 mm long one; triangle order and retriangulation do not change the blades; blades count against the support limit and in the planned volume and contact area |
 | Assembly checks | `internal/support` | a pillar pushed into the model, a pillar inside the gap, overlapping pillars, a floating pillar and an open pillar mesh each fail their check |
-| Pipeline | `prepare_test.go` | cube needs no supports; oblique cuboid turns onto its 800 mm² face; fixed bracket and bridge get pillar bodies that pass decad's interference and validity checks; occluded part gets branches with feet beside the base, and fails without branches, adding no bodies; a standing stick and rod are laid down; the nail is tilted under the 15 degree limit to its cheapest planned supports and stands when the limit is off; every finalist meets the tilt limit and the first-layer floor; input errors; build volume; limits; determinism; transform matrix and inverse; Analyze adds no bodies |
+| Pipeline | `prepare_test.go` | cube needs no supports; oblique cuboid turns onto its 800 mm² face; fixed bracket and bridge get pillar bodies that pass decad's interference and validity checks; a 4 mm deep bracket gets three blade bodies that pass them, and no pillar; occluded part gets branches with feet beside the base, and fails without branches, adding no bodies; a standing stick and rod are laid down; the nail is tilted under the 15 degree limit to its cheapest planned supports and stands when the limit is off; every finalist meets the tilt limit and the first-layer floor; input errors; build volume; limits; determinism; transform matrix and inverse; Analyze adds no bodies |
 | Profile | `options_test.go` | the example profile is valid and uncalibrated; missing and unknown fields and each broken rule are refused |
 | Examples | `examples/` | printed output matches |
 
@@ -56,7 +57,10 @@ Use only after the slicer check above passes for the same slicer and profile.
    slot until its ceiling sags; record the widest clean span.
 6. To check `plate_anchor_height_mm`, print the round rod from `Example_mtilt_strength` lying down without
    supports, and record whether its underside printed cleanly.
-7. Record the results below. A profile may set `"calibrated": true` only after this procedure passed with it.
+7. To check blades, print the assembly of `Example_mtilt_blades` (the 4 mm deep bracket and its three blades).
+   Record whether the blades stood to full height, whether the spans between them printed cleanly, and how the
+   blades came off.
+8. Record the results below. A profile may set `"calibrated": true` only after this procedure passed with it.
 
 ## Log of manual checks performed
 
