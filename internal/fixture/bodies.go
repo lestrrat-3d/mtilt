@@ -185,6 +185,12 @@ func (b *Bodies) ArmedStick(ctx context.Context) (*decad.Body, error) {
 	return decad.Union(ctx, one, left)
 }
 
+// StackedShelves returns the two-shelf part of the soup builder
+// StackedShelves.
+func (b *Bodies) StackedShelves(ctx context.Context) (*decad.Body, error) {
+	return b.Prism(ctx, stackedShelvesProfile, 0, 20)
+}
+
 // Slot returns a part with a 3 mm wide slot under a beam, 20 mm deep along
 // Y: posts at X 0..10 and X 13..23, joined by a beam at Z 30..40. The slot's
 // ceiling is a 3 mm span between two walls.

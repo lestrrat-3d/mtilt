@@ -150,7 +150,9 @@ func TestBuild(t *testing.T) {
 			require.Empty(t, plan.Uncovered)
 			require.NotEmpty(t, plan.Pillars)
 
-			requireAllPassed(t, support.RecheckPlan(placed, plan, params, tol))
+			rechecks, err := support.RecheckPlan(t.Context(), placed, plan, params, tol)
+			require.NoError(t, err)
+			requireAllPassed(t, rechecks)
 			checks, err := support.ValidateAssembly(t.Context(), placed, meshes(t, plan), allUpright(len(plan.Pillars)), params.TopGapMM, 0, tol)
 			require.NoError(t, err)
 			requireAllPassed(t, checks)
@@ -418,7 +420,9 @@ func TestBranches(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, plan.Uncovered)
 		require.NotEmpty(t, plan.Pillars)
-		requireAllPassed(t, support.RecheckPlan(placed, plan, withBranches, tol))
+		rechecks, err := support.RecheckPlan(t.Context(), placed, plan, withBranches, tol)
+		require.NoError(t, err)
+		requireAllPassed(t, rechecks)
 		b := placed.Bounds()
 		slope := math.Tan(40 * math.Pi / 180)
 		for _, pl := range plan.Pillars {
@@ -485,7 +489,9 @@ func TestTrees(t *testing.T) {
 	plan, err := support.Build(t.Context(), placed, p, limits, tol)
 	require.NoError(t, err)
 	require.Empty(t, plan.Uncovered)
-	requireAllPassed(t, support.RecheckPlan(placed, plan, p, tol))
+	rechecks, err := support.RecheckPlan(t.Context(), placed, plan, p, tol)
+	require.NoError(t, err)
+	requireAllPassed(t, rechecks)
 
 	t.Run("branches merge into trees within the member limit", func(t *testing.T) {
 		require.NotEmpty(t, plan.Trees)

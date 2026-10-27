@@ -14,7 +14,7 @@ import (
 // Version identifiers recorded in every report.
 const (
 	// SchemaVersion is the version of the Report JSON layout.
-	SchemaVersion = 3
+	SchemaVersion = 4
 	// Version is the mtilt release.
 	Version = "0.1.0-dev"
 	// AlgorithmVersion names the orientation search and the support
@@ -186,9 +186,13 @@ type CandidateReport struct {
 	// Estimate is the one-pass support cost estimate (see
 	// docs/design.md); Planned is the cost of the planned pillars, set
 	// only when supports were planned.
-	Estimate orient.Cost   `json:"estimated_support_cost"`
-	Planned  *orient.Cost  `json:"planned_support_cost,omitempty"`
-	Attempt  AttemptReport `json:"support_attempt"`
+	Estimate orient.Cost  `json:"estimated_support_cost"`
+	Planned  *orient.Cost `json:"planned_support_cost,omitempty"`
+	// Occlusion counts the demand samples a pillar rooted straight below
+	// cannot reach, measured for every candidate, planned or not (see
+	// support.MeasureOcclusion). It does not affect ranking or selection.
+	Occlusion support.OcclusionReport `json:"occlusion"`
+	Attempt   AttemptReport           `json:"support_attempt"`
 }
 
 // Attempt statuses.

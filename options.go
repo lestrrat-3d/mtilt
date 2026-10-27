@@ -277,8 +277,9 @@ type Limits struct {
 	MaxSupportAttempts int `json:"max_support_attempts"`
 	// MaxSupports caps the pillars in one attempt. Default 5,000.
 	MaxSupports int `json:"max_supports"`
-	// MaxSamples caps the support-demand samples in one attempt. Default
-	// 500,000.
+	// MaxSamples caps the support-demand samples in one attempt and in each
+	// candidate's occlusion measurement; past it the attempt fails and the
+	// occlusion class is "unknown". Default 500,000.
 	MaxSamples int `json:"max_samples"`
 }
 

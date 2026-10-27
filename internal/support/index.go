@@ -1,6 +1,7 @@
 package support
 
 import (
+	"context"
 	"math"
 
 	"github.com/lestrrat-3d/mtilt/internal/mesh"
@@ -26,7 +27,13 @@ type index struct {
 
 const maxIndexCellsPerAxis = 1024
 
-func newIndex(m *mesh.Mesh) *index {
+// ctxCheckEvery is how many triangles or samples a loop handles between
+// checks of its context.
+const ctxCheckEvery = 4096
+
+// newIndex builds the index of m. It returns ctx.Err() when ctx is
+// cancelled.
+func newIndex(ctx context.Context, m *mesh.Mesh) (*index, error) {
 	ix := &index{
 		tris:  m.Soup(),
 		boxes: make([]mesh.Box, len(m.Triangles)),
@@ -42,6 +49,11 @@ func newIndex(m *mesh.Mesh) *index {
 	ix.cell = math.Max(math.Max(w/float64(ix.nx), h/float64(ix.ny)), 1e-6)
 	ix.cells = make([][]int32, ix.nx*ix.ny)
 	for i, t := range ix.tris {
+		if i%ctxCheckEvery == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		tb := triBox(t)
 		ix.boxes[i] = tb
 		x0, y0, x1, y1 := ix.cellRange(tb.Min.X, tb.Min.Y, tb.Max.X, tb.Max.Y)
@@ -52,7 +64,7 @@ func newIndex(m *mesh.Mesh) *index {
 			}
 		}
 	}
-	return ix
+	return ix, nil
 }
 
 func triBox(t [3]r3.Vec) mesh.Box {

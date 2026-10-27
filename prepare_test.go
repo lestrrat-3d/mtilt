@@ -12,6 +12,7 @@ import (
 	"github.com/lestrrat-3d/mtilt"
 	"github.com/lestrrat-3d/mtilt/internal/fixture"
 	"github.com/lestrrat-3d/mtilt/internal/mesh"
+	"github.com/lestrrat-3d/mtilt/internal/support"
 	"github.com/lestrrat-3d/r3"
 	"github.com/lestrrat-3d/units"
 	"github.com/stretchr/testify/require"
@@ -413,6 +414,106 @@ func TestPreparePlates(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, selected(res).PlateAllowed)
 		require.Zero(t, selected(res).Metrics.PlateNormalTiltDeg)
+	})
+}
+
+// occlusionOf returns a candidate's measured sample counts and occluded grid
+// area, which must be present.
+func occlusionOf(t *testing.T, c mtilt.CandidateReport) (int, int, float64) {
+	t.Helper()
+	o := c.Occlusion
+	require.NotNil(t, o.Samples, "candidate %d", c.ID)
+	require.NotNil(t, o.OccludedSamples, "candidate %d", c.ID)
+	require.NotNil(t, o.OccludedGridAreaMM2, "candidate %d", c.ID)
+	return *o.Samples, *o.OccludedSamples, *o.OccludedGridAreaMM2
+}
+
+func TestPrepareOcclusion(t *testing.T) {
+	t.Run("the slot on its side is blocked; upright and on its face it is clear", func(t *testing.T) {
+		res, err := prepare(t, newBody(t, (*fixture.Bodies).Slot), mtilt.Options{})
+		require.NoError(t, err)
+		var sides, faces int
+		for _, c := range res.Report.Candidates {
+			samples, occluded, area := occlusionOf(t, c)
+			switch {
+			case c.ID == 0:
+				// Upright, the slot's ceiling is bridged.
+				require.Zero(t, samples)
+				require.Equal(t, support.OcclusionClear, c.Occlusion.Class)
+			case c.Down == [3]float64{1, 0, 0} || c.Down == [3]float64{-1, 0, 0}:
+				sides++
+				require.Equal(t, 631, occluded)
+				require.Equal(t, c.Attempt.UncoveredCount, occluded, "the planner's count")
+				require.Equal(t, c.Attempt.Samples, samples)
+				// 630 distinct grid XY points at a 1 mm pitch: the lattice
+				// includes the edges, so the area overcounts the 600 mm2
+				// ceiling by at most half its perimeter times the pitch.
+				require.InDelta(t, 630, area, 1e-9)
+				require.InDelta(t, 600, area, 50)
+				require.Equal(t, support.OcclusionBlocked, c.Occlusion.Class)
+			case c.Down == [3]float64{0, 1, 0} || c.Down == [3]float64{0, -1, 0}:
+				faces++
+				require.Zero(t, occluded)
+				require.Zero(t, area)
+				require.Equal(t, support.OcclusionClear, c.Occlusion.Class)
+			}
+		}
+		require.Equal(t, 2, sides)
+		require.Equal(t, 2, faces)
+
+		// Analyze measures the same candidates the same way.
+		a, err := mtilt.Analyze(t.Context(), newBody(t, (*fixture.Bodies).Slot), mtilt.Options{Profile: mtilt.ExampleProfile()})
+		require.NoError(t, err)
+		require.Len(t, a.Report.Candidates, len(res.Report.Candidates))
+		for i, c := range a.Report.Candidates {
+			require.Equal(t, res.Report.Candidates[i].Occlusion, c.Occlusion, "candidate %d", c.ID)
+		}
+	})
+
+	t.Run("the kept stacked shelves are blocked by their own lower shelf", func(t *testing.T) {
+		_, err := prepare(t, newBody(t, (*fixture.Bodies).StackedShelves), mtilt.Options{KeepOrientation: true})
+		fe := requireFailure(t, err, mtilt.ErrNoFeasibleCandidate)
+		c := fe.Report.Candidates[0]
+		samples, occluded, area := occlusionOf(t, c)
+		require.Equal(t, 840, samples)
+		require.Equal(t, 420, c.Attempt.UncoveredCount)
+		require.Equal(t, c.Attempt.UncoveredCount, occluded)
+		require.InDelta(t, 420, area, 1e-9)
+		require.Equal(t, support.OcclusionBlocked, c.Occlusion.Class)
+	})
+
+	t.Run("occlusion counts at least the planner's uncovered samples", func(t *testing.T) {
+		// With the plate limit off, the armed stick's three finalists lying
+		// across their arms fail planning. The edge pass covers some
+		// occluded samples (today 66, 63 and 66 occluded against 44, 43
+		// and 37 uncovered), so only the bound is asserted.
+		res, err := prepare(t, newBody(t, (*fixture.Bodies).ArmedStick), mtilt.Options{MaxPlateTiltDeg: 90})
+		require.NoError(t, err)
+		failed := 0
+		for _, c := range res.Report.Candidates {
+			if c.Attempt.Status == mtilt.AttemptNotAttempted {
+				continue
+			}
+			_, occluded, _ := occlusionOf(t, c)
+			require.GreaterOrEqual(t, occluded, c.Attempt.UncoveredCount, "candidate %d", c.ID)
+			if c.Attempt.Status != mtilt.AttemptFailed {
+				continue
+			}
+			failed++
+			require.Positive(t, c.Attempt.UncoveredCount, "candidate %d", c.ID)
+			require.Equal(t, support.OcclusionBlocked, c.Occlusion.Class, "candidate %d", c.ID)
+		}
+		require.Equal(t, 3, failed)
+	})
+
+	t.Run("over the sample limit the occlusion is unknown and null", func(t *testing.T) {
+		_, err := prepare(t, newBody(t, (*fixture.Bodies).Bracket), mtilt.Options{KeepOrientation: true, Limits: mtilt.Limits{MaxSamples: 10}})
+		fe := requireFailure(t, err, mtilt.ErrNoFeasibleCandidate)
+		c := fe.Report.Candidates[0]
+		require.Equal(t, support.OcclusionReport{Class: support.OcclusionUnknown}, c.Occlusion)
+		b, err := json.Marshal(c.Occlusion)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"samples":null,"occluded_samples":null,"occluded_grid_area_mm2":null,"class":"unknown"}`, string(b))
 	})
 }
 

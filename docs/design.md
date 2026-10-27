@@ -138,7 +138,9 @@ the plate nor entirely within the plate-anchor height. Each such triangle adds i
 the contact estimate, and that area times its mean height above the plate to the volume estimate: the column under
 it down to the plate. A triangle with any vertex lower than the shortest pillar can reach (`MinHeight + gap`, plus
 the tessellation bound) adds to `too_low_mm2`; no pillar fits there. The column ignores anything of the model
-between the triangle and the plate, so occluded demand is found only by planning.
+between the triangle and the plate, so the estimate does not see occluded demand. The report measures it for every
+candidate (section 7.9), but ranking does not use that measurement; a candidate with occluded demand fails only when
+planning leaves samples uncovered.
 
 The **planned cost** is measured on the pillars the planner places: their summed analytic volume and their summed
 round contact areas, priced with the same formula.
@@ -226,7 +228,8 @@ along one of 8 horizontal lines through it spread over half a turn (`internal/su
 `max_bridge_mm = 0` turns both off. The example profile uses 10 mm and 5 degrees; neither is a measured value. A
 cantilever (one wall) is never a bridge. The search's support estimate (section 5.2) does not apply this rule, so it
 overestimates support for parts with bridges; the planned cost does apply it. The report counts both kinds per
-candidate (`bridged_samples`, `wall_held_samples`).
+candidate (`bridged_samples`, `wall_held_samples`). The occlusion measurement (section 7.9) leaves out the same
+samples, so a bridged or wall-held point is never counted as occluded.
 
 ## 7. Supports
 
@@ -391,6 +394,40 @@ clearances come from the mesh checks above.
 
 The report lists these under `unchecked`.
 
+### 7.9 Occlusion measurement
+
+`support.MeasureOcclusion` runs on every candidate's placed mesh, in `Prepare` and `Analyze`, whether or not the
+candidate is planned. It takes the samples the planner would take (section 7.3), with the planner's parameters and
+`max_samples`. A sample is **occluded** when the vertical line from the plate up through it:
+
+- meets no triangle;
+- first meets a triangle that is not demand (section 6); or
+- first meets demand more than `support_spacing_mm * max(1, tan(threshold))`, plus the length tolerance, above or
+  below the sample, so a pillar there would hold a different surface.
+
+The candidate's `occlusion` object reports:
+
+| Field | Value |
+|---|---|
+| `samples` | the demand samples |
+| `occluded_samples` | the occluded samples |
+| `occluded_grid_area_mm2` | the number of distinct XY positions of occluded samples on the sample lattice (pitch `support_spacing_mm / 4`, anchored at the origin), times the pitch squared |
+| `class` | `blocked`, `clear` or `unknown` |
+
+A sample counts as on the lattice when a lattice point produced it, even when a triangle vertex at the same point
+came first. Lattice points on a region's edges count, so the area can exceed the region's true area by about half
+its perimeter times the pitch: the slot fixture lying on its side has a 600 mm² ceiling and reports 630 mm².
+
+The class is `blocked` when some occluded sample has no clear (not occluded) sample whose position would cover it
+under the coverage rule (section 7.3), and `clear` otherwise. It is a heuristic. A clear sample nearby does not
+prove a pillar fits there, and an occluded sample does not make planning fail when a pillar beside it covers it.
+So `occluded_samples` can exceed the planner's `uncovered_samples`: with the plate limit off, the armed-stick
+fixture's three finalists lying across their arms report 66, 63 and 66 occluded samples, and planning leaves 44, 43
+and 37 uncovered. When the samples would exceed `max_samples`, the class is `unknown` and the three numbers are
+`null`.
+
+The measurement is reported only. It changes no ranking, selection or plan.
+
 ## 8. Result and the document
 
 `Prepare` returns the moved model, the support bodies (numbered by Y, then X, of their tip), the transform and the
@@ -413,7 +450,7 @@ The report holds no timing. Two runs with the same body, options and build give 
 | `max_planar_faces` | 12 | fewer face-down seeds |
 | `max_support_attempts` | 8 | the number of finalists planned |
 | `max_supports` | 5,000 | attempt fails |
-| `max_samples` | 500,000 | attempt fails |
+| `max_samples` | 500,000 | attempt fails; the candidate's occlusion is `unknown` |
 
 Every long loop checks its `context.Context`. decad's `Verify` time grows with the number of bodies in the
 document. As a dated measurement (2026-10-06, 24-core machine), `Prepare` took about 4 s for the bracket's 41
@@ -431,7 +468,7 @@ itself took milliseconds.
 | `internal/mesh/` | `Mesh`, `FromBody` (decad tessellation), measurements, inertia, `Tolerance`, `Validate` |
 | `internal/overhang/` | overhang angle and triangle classes |
 | `internal/orient/` | long axis, support-cost estimate, direction search, placement, metrics, ranking |
-| `internal/support/` | XY index, separating-axis tests, pillar geometry and bodies, planning, plan and mesh checks |
+| `internal/support/` | XY index, separating-axis tests, pillar geometry and bodies, planning, occlusion measurement, plan and mesh checks |
 | `internal/fixture/` | test shapes as triangle soups and as decad bodies |
 | `profiles/example-fdm.json` | illustrative, uncalibrated profile |
 | `examples/` | executable examples |

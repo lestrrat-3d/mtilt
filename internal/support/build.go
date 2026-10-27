@@ -118,30 +118,22 @@ const slackFactor = 4
 // their own position was refused. Build returns ErrLimit when the samples
 // or pillars would exceed lim, and ctx.Err() when ctx is cancelled.
 func Build(ctx context.Context, placed *mesh.Mesh, p Params, lim Limits, tol mesh.Tolerance) (*Plan, error) {
-	b := &builder{
-		ix:    newIndex(placed),
-		p:     p,
-		lim:   lim,
-		eps:   tol.Length,
-		slack: slackFactor * tol.Serialization,
-		dzMax: p.SpacingMM * math.Max(1, math.Tan(p.ThresholdDeg*math.Pi/180)),
-		kinds: make([]overhang.Kind, len(placed.Triangles)),
-		cells: make(map[[2]int64][]int),
+	b, demand, err := newBuilder(ctx, placed, p, lim, tol)
+	if err != nil {
+		return nil, err
 	}
-	plan := &Plan{}
-	for i := range placed.Triangles {
-		b.kinds[i] = overhang.Classify(placed.Triangle(i), p.ThresholdDeg, tol.Plate, p.PlateAnchorMM)
-		if b.kinds[i] == overhang.Demand {
-			plan.DemandTriangles++
-		}
-	}
-	if plan.DemandTriangles == 0 {
+	plan := &Plan{DemandTriangles: demand}
+	if demand == 0 {
 		return plan, nil
 	}
 
-	samples, bridged, held, err := b.samples(ctx)
+	ds, bridged, held, err := b.samples(ctx)
 	if err != nil {
 		return nil, err
+	}
+	samples := make([]r3.Vec, len(ds))
+	for i, s := range ds {
+		samples[i] = s.Point
 	}
 	plan.samples = samples
 	plan.Samples = len(samples)
@@ -185,6 +177,39 @@ func (plan *Plan) Members(id int) []Pillar {
 	return out
 }
 
+// newBuilder indexes and classifies placed for planning. It returns the
+// builder and the number of demand triangles, or ctx.Err() when ctx is
+// cancelled.
+func newBuilder(ctx context.Context, placed *mesh.Mesh, p Params, lim Limits, tol mesh.Tolerance) (*builder, int, error) {
+	ix, err := newIndex(ctx, placed)
+	if err != nil {
+		return nil, 0, err
+	}
+	b := &builder{
+		ix:    ix,
+		p:     p,
+		lim:   lim,
+		eps:   tol.Length,
+		slack: slackFactor * tol.Serialization,
+		dzMax: p.coverDZ(),
+		kinds: make([]overhang.Kind, len(placed.Triangles)),
+		cells: make(map[[2]int64][]int),
+	}
+	demand := 0
+	for i := range placed.Triangles {
+		if i%ctxCheckEvery == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, 0, err
+			}
+		}
+		b.kinds[i] = overhang.Classify(placed.Triangle(i), p.ThresholdDeg, tol.Plate, p.PlateAnchorMM)
+		if b.kinds[i] == overhang.Demand {
+			demand++
+		}
+	}
+	return b, demand, nil
+}
+
 type builder struct {
 	ix    *index
 	p     Params
@@ -221,6 +246,12 @@ func (b *builder) nearby(x, y float64, fn func(Pillar) bool) bool {
 	return false
 }
 
+// coverDZ is the coverage rule's largest height difference between a sample
+// and the surface a pillar holds: SpacingMM * max(1, tan(ThresholdDeg)).
+func (p Params) coverDZ() float64 {
+	return p.SpacingMM * math.Max(1, math.Tan(p.ThresholdDeg*math.Pi/180))
+}
+
 func (b *builder) covers(pl Pillar, s r3.Vec) bool {
 	return math.Hypot(s.X-pl.X, s.Y-pl.Y) <= b.p.SpacingMM+b.eps && math.Abs(s.Z-pl.SurfaceZ) <= b.dzMax+b.eps
 }
@@ -239,22 +270,50 @@ func (b *builder) add(pl Pillar) error {
 	return nil
 }
 
-func (b *builder) samples(ctx context.Context) ([]r3.Vec, int, int, error) {
+// DemandSample is one support-demand sample point. Grid is true when a grid
+// point of the sample lattice (pitch SpacingMM/4, anchored at the origin)
+// produced it, even when a triangle vertex at the same point came first.
+type DemandSample struct {
+	Point r3.Vec
+	Grid  bool
+}
+
+// Samples returns the demand samples Build plans on, sorted by Y, X, Z, and
+// the counts of samples left out as bridged and as wall-held (see Build).
+// It returns ErrLimit when there would be more than lim.MaxSamples samples,
+// and ctx.Err() when ctx is cancelled. lim.MaxSupports is not used.
+func Samples(ctx context.Context, placed *mesh.Mesh, p Params, lim Limits, tol mesh.Tolerance) ([]DemandSample, int, int, error) {
+	b, demand, err := newBuilder(ctx, placed, p, lim, tol)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	if demand == 0 {
+		return nil, 0, 0, nil
+	}
+	return b.samples(ctx)
+}
+
+func (b *builder) samples(ctx context.Context) ([]DemandSample, int, int, error) {
 	q := b.p.SpacingMM / sampleDivisions
-	seen := make(map[r3.Vec]struct{})
-	var out []r3.Vec
+	// seen maps each point pushed so far to its index in out, or -1 when
+	// it was left out as bridged or held.
+	seen := make(map[r3.Vec]int)
+	var out []DemandSample
 	bridged, held := 0, 0
 	var tilt float64
-	push := func(v r3.Vec) error {
+	push := func(v r3.Vec, grid bool) error {
 		// A demand triangle can reach below the plate-anchor height; the
 		// part of it down there is anchored, not demand.
 		if v.Z <= b.p.PlateAnchorMM {
 			return nil
 		}
-		if _, ok := seen[v]; ok {
+		if i, ok := seen[v]; ok {
+			if grid && i >= 0 {
+				out[i].Grid = true
+			}
 			return nil
 		}
-		seen[v] = struct{}{}
+		seen[v] = -1
 		switch b.bridgeCheck(v, tilt) {
 		case spanBridged:
 			bridged++
@@ -267,7 +326,8 @@ func (b *builder) samples(ctx context.Context) ([]r3.Vec, int, int, error) {
 		if len(out) == b.lim.MaxSamples {
 			return fmt.Errorf("%w: more than %d support-demand samples", ErrLimit, b.lim.MaxSamples)
 		}
-		out = append(out, v)
+		seen[v] = len(out)
+		out = append(out, DemandSample{Point: v, Grid: grid})
 		return nil
 	}
 	for i, t := range b.ix.tris {
@@ -280,7 +340,7 @@ func (b *builder) samples(ctx context.Context) ([]r3.Vec, int, int, error) {
 		n, _ := mesh.TriangleNormal(t)
 		tilt = overhang.Angle(n)
 		for _, v := range t {
-			if err := push(v); err != nil {
+			if err := push(v, false); err != nil {
 				return nil, 0, 0, err
 			}
 		}
@@ -292,14 +352,14 @@ func (b *builder) samples(ctx context.Context) ([]r3.Vec, int, int, error) {
 				if !ok {
 					continue
 				}
-				if err := push(r3.NewVec(x, y, z)); err != nil {
+				if err := push(r3.NewVec(x, y, z), true); err != nil {
 					return nil, 0, 0, err
 				}
 			}
 		}
 	}
-	slices.SortFunc(out, func(a, c r3.Vec) int {
-		return cmp.Or(cmp.Compare(a.Y, c.Y), cmp.Compare(a.X, c.X), cmp.Compare(a.Z, c.Z))
+	slices.SortFunc(out, func(a, c DemandSample) int {
+		return cmp.Or(cmp.Compare(a.Point.Y, c.Point.Y), cmp.Compare(a.Point.X, c.Point.X), cmp.Compare(a.Point.Z, c.Point.Z))
 	})
 	return out, bridged, held, nil
 }

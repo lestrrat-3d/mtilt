@@ -206,6 +206,8 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 		Quantum: orient.ScoreQuantum,
 	}
 
+	params := s.planningParams()
+	lim := s.supportLimits()
 	entries := make([]orient.Entry, len(s.cands))
 	s.placed = make([]*mesh.Mesh, len(s.cands))
 	s.full = make([]r3.Transform, len(s.cands))
@@ -221,6 +223,10 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 		met := orient.Measure(placed, s.opts.Profile.OverhangThreshold, s.opts.Profile.PlateAnchorMM, s.opts.Profile.LayerHeightMM, s.tol)
 		met.LongAxisElevationDeg = c.ElevationDeg
 		met.PlateNormalTiltDeg = c.PlateTiltDeg
+		occ, err := support.MeasureOcclusion(ctx, placed, params, lim, s.tol)
+		if err != nil {
+			return nil, err
+		}
 		fit := s.fit(placed.Bounds())
 		cr := CandidateReport{
 			ID:           c.ID,
@@ -232,6 +238,7 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 			PlateAllowed: c.PlateAllowed,
 			Fit:          fit,
 			Estimate:     c.Estimate,
+			Occlusion:    occ,
 			Attempt:      AttemptReport{Status: AttemptNotAttempted},
 		}
 		if c.Source == orient.SourcePlanarFace {
@@ -296,6 +303,11 @@ func (s *session) planningParams() support.Params {
 	return p
 }
 
+// supportLimits returns the work limits for one support plan.
+func (s *session) supportLimits() support.Limits {
+	return support.Limits{MaxSupports: s.opts.Limits.MaxSupports, MaxSamples: s.opts.Limits.MaxSamples}
+}
+
 // Prepare orients body for printing and builds breakaway supports for it as
 // decad bodies.
 //
@@ -330,7 +342,7 @@ func Prepare(ctx context.Context, body *decad.Body, opts Options) (*Result, erro
 	}
 
 	params := s.planningParams()
-	lim := support.Limits{MaxSupports: s.opts.Limits.MaxSupports, MaxSamples: s.opts.Limits.MaxSamples}
+	lim := s.supportLimits()
 	best := -1
 	var bestPlan *support.Plan
 	for _, id := range order {
@@ -432,7 +444,11 @@ func (s *session) attempt(ctx context.Context, id int, params support.Params, li
 		cr.Attempt.Uncovered = plan.Uncovered[:min(n, maxUncoveredListed)]
 		return failed(fmt.Sprintf("coverage gap: %d of %d demand samples uncovered; first: %s", n, plan.Samples, plan.Uncovered[0].Reason))
 	}
-	for _, c := range support.RecheckPlan(placed, plan, params, s.tol) {
+	checks, err := support.RecheckPlan(ctx, placed, plan, params, s.tol)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range checks {
 		if c.Status == mesh.StatusFailed {
 			return failed(fmt.Sprintf("plan check %s failed: %s", c.Name, c.Detail))
 		}
