@@ -161,16 +161,21 @@ edge, with every face at exactly 45 degrees, needs no support and wins while tou
    six principal directions `+A[0], -A[0], +A[1], -A[1], +A[2], -A[2]` (source `principal_axis`). Seeds come before sweep directions, so a seed wins a tie.
 2. **Sweep:** `sweep_directions` (default 2000) directions spread evenly over the sphere (a Fibonacci lattice),
    about 4.5 degrees apart.
-3. **Filter and rank:** a seed or sweep direction is kept when it is within the tilt limit, meets the first-layer
-   floor, has no `too_low_mm2`, and is within the plate limit. The report counts the kept directions as
-   `allowed_directions`, and those that meet every other filter but fail the plate limit as
-   `plate_excluded_directions`. Kept directions are ranked by estimated cost (rounded to 1e-9), then by lower
-   elevation; the best `max_support_attempts` (default 8) that are at least 1 degree apart become finalists.
+3. **Filter and rank:** a seed or sweep direction is kept when it is within the tilt limit, fits the build volume's
+   height, meets the first-layer floor, has no `too_low_mm2`, and is within the plate limit. The model's height in
+   direction d is its vertices' extent along d, which no turn about the vertical axis changes; it must be at most
+   `z_mm - margin_mm`, plus the length tolerance and the tessellation bound. A profile without a build volume skips
+   this filter. The X and Y fit depends on the turn, so it stays a check on each placed candidate (step 5). The
+   report counts the kept directions as `allowed_directions`, and those that meet every other filter but fail the
+   plate limit as `plate_excluded_directions`. Kept directions are ranked by estimated cost (rounded to 1e-9),
+   then by lower elevation; the best `max_support_attempts` (default 8) that are at least 1 degree apart become
+   finalists.
 4. **Refine:** each finalist tries 8 directions around it at the sweep spacing; it moves to the best one that
    passes the same filter and is strictly cheaper, and the step halves whenever none is, down to 0.25 degrees. A
    refined finalist is never worse than where it started.
-5. **Plan:** every finalist gets a support plan (section 7). Among the plans that succeed, the lowest planned cost
-   wins; ties go to the larger first-layer area, then the lower height, then the lower elevation, then the lower ID.
+5. **Plan:** every finalist whose placed model fits the build volume gets a support plan (section 7). Among the
+   plans that succeed, the lowest planned cost wins; ties go to the larger first-layer area, then the lower height,
+   then the lower elevation, then the lower ID.
 
 The result is the best orientation found at this resolution, not a proven global optimum. The report lists the
 given orientation and every finalist with its estimate, planned cost, metrics and outcome. The given orientation is

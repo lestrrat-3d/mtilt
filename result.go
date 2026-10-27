@@ -20,7 +20,7 @@ const (
 	// AlgorithmVersion names the orientation search and the support
 	// strategy. It changes whenever either can produce different output
 	// for the same input and options.
-	AlgorithmVersion = "orient-3/pillar-2"
+	AlgorithmVersion = "orient-4/pillar-2"
 )
 
 // Errors Prepare and Analyze return. Failures that carry a report are

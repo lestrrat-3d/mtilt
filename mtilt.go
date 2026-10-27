@@ -177,6 +177,14 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 			Estimate: est.Estimate(d),
 		}}
 	} else {
+		var maxHeight *float64
+		if v := s.opts.Profile.BuildVolume; v != nil {
+			// The same allowance fit uses for the top of the volume. The XY
+			// fit depends on the turn about the vertical axis and stays a
+			// check on each placed candidate.
+			h := v.ZMM - v.MarginMM + s.tol.Length + s.bound
+			maxHeight = &h
+		}
 		cands, stats, err := orient.Search(ctx, s.model, s.pr, est, orient.SearchOptions{
 			Directions:       s.opts.Limits.SweepDirections,
 			MaxPlanarFaces:   s.opts.Limits.MaxPlanarFaces,
@@ -184,6 +192,7 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 			MaxTiltDeg:       s.opts.MaxLongAxisTiltDeg,
 			MaxPlateTiltDeg:  s.opts.MaxPlateTiltDeg,
 			MinFirstLayerMM2: s.opts.Profile.MinFirstLayerAreaMM2,
+			MaxHeightMM:      maxHeight,
 		})
 		if err != nil {
 			return nil, err

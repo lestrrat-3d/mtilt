@@ -74,7 +74,10 @@ type Profile struct {
 	// straight pillars only.
 	MaxBranchLeanDeg float64 `json:"max_branch_lean_deg"`
 
-	// BuildVolume is optional. Without it, fit is reported as unchecked.
+	// BuildVolume is optional. With it, the search keeps only directions
+	// whose model height fits ZMM - MarginMM, and every placed candidate
+	// and its supports are checked against the whole volume. Without it,
+	// fit is reported as unchecked.
 	BuildVolume *BuildVolume `json:"build_volume,omitempty"`
 }
 

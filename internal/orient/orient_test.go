@@ -209,6 +209,14 @@ func TestEstimator(t *testing.T) {
 		require.InDelta(t, 400, c.TooLowMM2, 1e-9)
 	})
 
+	t.Run("height is the extent along the down direction", func(t *testing.T) {
+		e := estimator(build(t, fixture.PlateBox()))
+		require.InDelta(t, 5, e.Height(down), 1e-9)
+		require.InDelta(t, 40, e.Height(r3.NewVec(0, 1, 0)), 1e-9)
+		d, _ := r3.NewVec(1, 0, -1).Normalize()
+		require.InDelta(t, 105/math.Sqrt2, e.Height(d), 1e-9)
+	})
+
 	t.Run("the estimate does not depend on the frame", func(t *testing.T) {
 		m := build(t, fixture.Bracket())
 		rot, err := r3.FromBasis(r3.Basis{EX: r3.NewVec(0, 1, 0), EY: r3.NewVec(0, 0, 1), EZ: r3.NewVec(1, 0, 0)}, r3.NewVec(5, 6, 7))
@@ -286,6 +294,26 @@ func TestSearch(t *testing.T) {
 			}
 		}
 		require.Equal(t, 2, onEdge, "d = +Y and d = -Y")
+	})
+
+	t.Run("a height limit removes the plate box's 40 mm on-edge finalists", func(t *testing.T) {
+		m := build(t, fixture.PlateBox())
+		pr := orient.NewPrincipal(m.Inertia())
+		e := estimator(m)
+		opts := searchOpts
+		opts.MaxPlateTiltDeg = 90
+		_, free, err := orient.Search(t.Context(), m, pr, e, opts)
+		require.NoError(t, err)
+		limit := 39.0
+		opts.MaxHeightMM = &limit
+		cands, stats, err := orient.Search(t.Context(), m, pr, e, opts)
+		require.NoError(t, err)
+		require.Less(t, stats.Allowed, free.Allowed)
+		require.Greater(t, len(cands), 1)
+		for _, c := range cands[1:] {
+			require.LessOrEqual(t, e.Height(c.Down), limit, "candidate %d", c.ID)
+			require.Less(t, math.Abs(c.Down.Y), 1-1e-9, "candidate %d", c.ID)
+		}
 	})
 
 	t.Run("finalists are sorted, distinct, and refined ones are no worse", func(t *testing.T) {

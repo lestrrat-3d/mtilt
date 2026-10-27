@@ -60,9 +60,9 @@ beside the base and branch in under it: 39 tips on 24 bodies.
 - Searches inside those limits for the orientation with the least support. It estimates support volume and contact
   area for about 2,000 directions spread over the sphere plus every large flat face put down, refines the 8 best,
   plans real supports for each, and keeps the one whose planned pillars cost least. A direction must also leave at
-  least `min_first_layer_area_mm2` on the first layer, so the part does not balance on an edge. Each pillar is a base
-  disc, a shaft and a tip that narrows to a small contact, and stops `top_contact_gap_mm` below the surface it
-  holds.
+  least `min_first_layer_area_mm2` on the first layer, so the part does not balance on an edge, and, when the profile
+  has a `build_volume`, leave the part no taller than the volume. Each pillar is a base disc, a shaft and a tip
+  that narrows to a small contact, and stops `top_contact_gap_mm` below the surface it holds.
 - Leaves short spans between two walls unsupported (up to `max_bridge_mm`, 10 mm in the example profile), because
   the printer draws them in the air, and leaves points that sit on top of a wall to that wall.
 - For the selected candidate only, adds the moved model (`PlacedCopy`; the input stays live) and one revolved

@@ -588,6 +588,73 @@ func TestPrepareLimitsAndVolume(t *testing.T) {
 		require.Zero(t, fe.Report.Search.SupportAttempts)
 	})
 
+	t.Run("the height limit tilts the nail less to fit a 30.1 mm volume", func(t *testing.T) {
+		// Without a volume the nail stands 104 mm tall as given, and its
+		// seven finalists, tilted about 4.6 degrees, are 30.22 to 30.50 mm
+		// tall: none would fit.
+		a, err := mtilt.Analyze(t.Context(), newBody(t, (*fixture.Bodies).Nail), mtilt.Options{Profile: mtilt.ExampleProfile()})
+		require.NoError(t, err)
+		require.Len(t, a.Report.Candidates, 8)
+		require.InDelta(t, 104, a.Report.Candidates[0].Metrics.HeightMM, 1e-6)
+		for _, c := range a.Report.Candidates[1:] {
+			require.Greater(t, c.Metrics.HeightMM, 30.2, "candidate %d", c.ID)
+			require.Less(t, c.Metrics.HeightMM, 30.51, "candidate %d", c.ID)
+		}
+
+		p := mtilt.ExampleProfile()
+		p.BuildVolume = &mtilt.BuildVolume{XMM: 200, YMM: 200, ZMM: 30.1}
+		res, err := prepare(t, newBody(t, (*fixture.Bodies).Nail), mtilt.Options{Profile: p})
+		require.NoError(t, err)
+		requireNoFailedCheck(t, res.Report)
+		rep := res.Report
+		allow := 30.1 + rep.Tolerances.LengthMM + rep.Input.TessellationBoundMM
+		// The search finds the four turns of one pose, tilted 1.42 degrees
+		// about X or Y, 30.0899 mm tall.
+		require.Len(t, rep.Candidates, 5)
+		require.Equal(t, "exceeds", rep.Candidates[0].Fit)
+		for _, c := range rep.Candidates[1:] {
+			require.LessOrEqual(t, c.Metrics.HeightMM, allow, "candidate %d", c.ID)
+			require.InDelta(t, 30.08987, c.Metrics.HeightMM, 1e-5, "candidate %d", c.ID)
+			require.Equal(t, "fits", c.Fit, "candidate %d", c.ID)
+		}
+		sel := selected(res)
+		require.Equal(t, 1, sel.ID)
+		require.InDelta(t, 1.41926, sel.Metrics.LongAxisElevationDeg, 1e-5)
+		require.Len(t, res.Supports, 75)
+	})
+
+	t.Run("the height limit drops the recess plate's on-edge directions", func(t *testing.T) {
+		// With no volume, the plate limit excludes 8 directions, all near
+		// d = +-Y, where the plate stands 60 to 61.1 mm tall.
+		a, err := mtilt.Analyze(t.Context(), newBody(t, (*fixture.Bodies).RecessPlate), mtilt.Options{Profile: mtilt.ExampleProfile()})
+		require.NoError(t, err)
+		require.Equal(t, 8, a.Report.Search.PlateExcluded)
+
+		p := mtilt.ExampleProfile()
+		p.BuildVolume = &mtilt.BuildVolume{XMM: 200, YMM: 200, ZMM: 59}
+		a, err = mtilt.Analyze(t.Context(), newBody(t, (*fixture.Bodies).RecessPlate), mtilt.Options{Profile: p})
+		require.NoError(t, err)
+		require.Zero(t, a.Report.Search.PlateExcluded)
+
+		// With the plate limit off, those 8 directions are allowed without a
+		// volume, and none is allowed in the 59 mm volume.
+		a, err = mtilt.Analyze(t.Context(), newBody(t, (*fixture.Bodies).RecessPlate), mtilt.Options{Profile: mtilt.ExampleProfile(), MaxPlateTiltDeg: 90})
+		require.NoError(t, err)
+		require.Equal(t, 8, a.Report.Search.Allowed)
+		for _, c := range a.Report.Candidates[1:] {
+			require.Greater(t, math.Abs(c.Down[1]), 0.99, "candidate %d", c.ID)
+			require.Greater(t, c.Metrics.HeightMM, 59.0, "candidate %d", c.ID)
+		}
+		a, err = mtilt.Analyze(t.Context(), newBody(t, (*fixture.Bodies).RecessPlate), mtilt.Options{Profile: p, MaxPlateTiltDeg: 90})
+		require.NoError(t, err)
+		require.Zero(t, a.Report.Search.Allowed)
+		require.Len(t, a.Report.Candidates, 1, "only the original")
+
+		_, err = prepare(t, newBody(t, (*fixture.Bodies).RecessPlate), mtilt.Options{Profile: p})
+		requireFailure(t, err, mtilt.ErrNoFeasibleCandidate)
+		require.NotContains(t, err.Error(), "plate tilt limit excluded")
+	})
+
 	t.Run("supports in the volume margin disqualify the candidate", func(t *testing.T) {
 		// The bracket alone is 40 x 20; a pillar base reaches 1.5 mm past
 		// the arm's edge, so a 44 x 24 volume with a 2 mm margin holds the
