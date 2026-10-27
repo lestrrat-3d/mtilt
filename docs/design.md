@@ -101,7 +101,8 @@ measurement (`measure.go`) and ranking (`rank.go`) are separate.
 
 The inertia tensor of the tessellated solid (unit density, about its centroid; `Mesh.Inertia`) is diagonalized by
 Jacobi rotations. Its principal axes, sorted by ascending moment, give the **long axis** (smallest moment) and the
-**elongation** `1 - I1 / I2`: 0 for a cube, a sphere or a square plate, and about 0.99 for an 8 x 8 x 100 mm stick.
+**elongation** `1 - I1 / I2`: 0 for a cube, a sphere or a square plate, 0.84 for a 100 x 40 x 5 mm plate, and about
+0.99 for an 8 x 8 x 100 mm stick.
 The tilt limit applies when the elongation is at least 0.1. The long axis's **elevation** in direction d is
 `asin(|a . d|)` for long axis a: 0 lying flat, 90 standing up.
 

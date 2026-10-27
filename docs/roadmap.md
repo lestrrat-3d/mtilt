@@ -6,8 +6,8 @@ ships with tests that check a computed result, and with updates to [design.md](d
 ## 1. Print-validated defaults
 
 Run the calibration procedure in [validation.md](validation.md) on at least one printer, material and slicer.
-Record the results there, and either calibrate `profiles/example-fdm.json` (including `plate_anchor_height_mm`
-and the strength weight) or add a calibrated profile beside it with `"calibrated": true`.
+Record the results there, and either calibrate `profiles/example-fdm.json` (including `plate_anchor_height_mm`)
+or add a calibrated profile beside it with `"calibrated": true`.
 
 ## 2. Assembly export
 

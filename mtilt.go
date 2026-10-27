@@ -269,7 +269,7 @@ func (s *session) addUnchecked() {
 		{Property: "slicer_interpretation", Note: "slicers can merge, offset or re-interface support bodies; inspect the sliced preview"},
 		{Property: "bridges", Note: "spans up to max_bridge_mm between two walls are left unsupported; whether the printer bridges them cleanly was not tested"},
 		{Property: "stability", Note: "centroid_over_contact_hull is a geometric heuristic, not a physical simulation"},
-		{Property: "layer_strength", Note: "the strength term scores the long axis's angle to the plate; no load or layer-adhesion analysis was run"},
+		{Property: "layer_strength", Note: "the long-axis tilt limit is a modelling assumption; no load or layer-adhesion analysis was run"},
 	}
 	if s.opts.Profile.BuildVolume == nil {
 		s.report.Unchecked = append(s.report.Unchecked, Unchecked{
@@ -296,8 +296,9 @@ func (s *session) planningParams() support.Params {
 // that exceeds the build volume is skipped. For each of the first
 // Options.Limits.MaxSupportAttempts remaining candidates, Prepare plans
 // supports on the tessellation (see package internal/support) and checks
-// the plan; the first candidate whose plan covers all demand and passes
-// every check is selected. A candidate with no support demand needs no
+// the plan. Among the candidates whose plan covers all demand and passes
+// every check, the one with the lowest planned cost is selected (ties as
+// in Report.Objective). A candidate with no support demand needs no
 // supports.
 //
 // For the selected candidate only, Prepare adds bodies to body's document:
