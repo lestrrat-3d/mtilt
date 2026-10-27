@@ -84,34 +84,6 @@ func TestOccluded(t *testing.T) {
 	require.True(t, occ.Occluded(r3.NewVec(5, 0, 40)))
 }
 
-func TestClassifyOcclusion(t *testing.T) {
-	_, tol := placedAsIs(t, fixture.Cube())
-	occluded := support.DemandSample{Point: r3.NewVec(0, 0, 10)}
-	cases := []struct {
-		name  string
-		clear r3.Vec
-		want  support.OcclusionClass
-	}{
-		{"clear sample one spacing away", r3.NewVec(4, 0, 10), support.OcclusionClear},
-		{"clear sample one spacing up", r3.NewVec(0, 0, 14), support.OcclusionClear},
-		{"clear sample too far", r3.NewVec(4.1, 0, 10), support.OcclusionBlocked},
-		{"clear sample too high", r3.NewVec(0, 0, 14.1), support.OcclusionBlocked},
-	}
-	for _, c := range cases {
-		samples := []support.DemandSample{occluded, {Point: c.clear}}
-		got, err := support.ClassifyOcclusion(t.Context(), samples, []bool{true, false}, params, tol)
-		require.NoError(t, err)
-		require.Equal(t, c.want, got, c.name)
-	}
-
-	got, err := support.ClassifyOcclusion(t.Context(), []support.DemandSample{occluded}, []bool{false}, params, tol)
-	require.NoError(t, err)
-	require.Equal(t, support.OcclusionClear, got, "nothing occluded")
-
-	_, err = support.ClassifyOcclusion(t.Context(), []support.DemandSample{occluded}, nil, params, tol)
-	require.Error(t, err)
-}
-
 func TestMeasureOcclusion(t *testing.T) {
 	measure := func(t *testing.T, p support.Params, soup [][3]r3.Vec) (support.OcclusionReport, *support.Plan) {
 		t.Helper()
@@ -129,10 +101,9 @@ func TestMeasureOcclusion(t *testing.T) {
 		rep, plan := measure(t, params, fixture.Bracket())
 		// The vertical line under the arm's edge at the post grazes the
 		// post's bottom face first: 21 samples along Y. Pillars beside
-		// them cover them, so the class is clear and the plan is complete.
+		// them cover them, so the plan is complete.
 		require.Equal(t, 21, *rep.OccludedSamples)
 		require.InDelta(t, 21*pitch*pitch, *rep.OccludedGridAreaMM2, 1e-9)
-		require.Equal(t, support.OcclusionClear, rep.Class)
 		require.Empty(t, plan.Uncovered)
 	})
 
@@ -142,7 +113,6 @@ func TestMeasureOcclusion(t *testing.T) {
 		require.Equal(t, plan.Samples, *rep.OccludedSamples)
 		// The top arm's underside, X 10..40 by Y 0..20, at pitch 1.
 		require.InDelta(t, 31*21*pitch*pitch, *rep.OccludedGridAreaMM2, 1e-9)
-		require.Equal(t, support.OcclusionBlocked, rep.Class)
 	})
 
 	t.Run("stacked shelves", func(t *testing.T) {
@@ -164,14 +134,13 @@ func TestMeasureOcclusion(t *testing.T) {
 		// standing there or beside it, never as occluded.
 		require.Equal(t, map[string]int{support.ReasonCollision: 42, support.ReasonCrowded: 378}, reasons)
 		require.InDelta(t, 420*pitch*pitch, *rep.OccludedGridAreaMM2, 1e-9)
-		require.Equal(t, support.OcclusionBlocked, rep.Class)
 	})
 
-	t.Run("sample limit gives unknown", func(t *testing.T) {
+	t.Run("sample limit gives no numbers", func(t *testing.T) {
 		placed, tol := placedAsIs(t, fixture.Bracket())
 		rep, err := support.MeasureOcclusion(t.Context(), placed, params, support.Limits{MaxSamples: 10}, tol)
 		require.NoError(t, err)
-		require.Equal(t, support.OcclusionReport{Class: support.OcclusionUnknown}, rep)
+		require.Equal(t, support.OcclusionReport{}, rep)
 	})
 
 	t.Run("cancelled", func(t *testing.T) {

@@ -526,7 +526,7 @@ func occlusionOf(t *testing.T, c mtilt.CandidateReport) (int, int, float64) {
 }
 
 func TestPrepareOcclusion(t *testing.T) {
-	t.Run("the slot on its side is blocked; upright and on its face it is clear", func(t *testing.T) {
+	t.Run("the slot's ceiling is occluded on its side and not on its face", func(t *testing.T) {
 		res, err := prepare(t, newBody(t, (*fixture.Bodies).Slot), mtilt.Options{})
 		require.NoError(t, err)
 		var sides, faces int
@@ -536,7 +536,7 @@ func TestPrepareOcclusion(t *testing.T) {
 			case c.ID == 0:
 				// Upright, the slot's ceiling is bridged.
 				require.Zero(t, samples)
-				require.Equal(t, support.OcclusionClear, c.Occlusion.Class)
+				require.Zero(t, occluded)
 			case c.Down == [3]float64{1, 0, 0} || c.Down == [3]float64{-1, 0, 0}:
 				sides++
 				require.Equal(t, 631, occluded)
@@ -547,12 +547,10 @@ func TestPrepareOcclusion(t *testing.T) {
 				// ceiling by at most half its perimeter times the pitch.
 				require.InDelta(t, 630, area, 1e-9)
 				require.InDelta(t, 600, area, 50)
-				require.Equal(t, support.OcclusionBlocked, c.Occlusion.Class)
 			case c.Down == [3]float64{0, 1, 0} || c.Down == [3]float64{0, -1, 0}:
 				faces++
 				require.Zero(t, occluded)
 				require.Zero(t, area)
-				require.Equal(t, support.OcclusionClear, c.Occlusion.Class)
 			}
 		}
 		require.Equal(t, 2, sides)
@@ -576,7 +574,6 @@ func TestPrepareOcclusion(t *testing.T) {
 		require.Equal(t, 420, c.Attempt.UncoveredCount)
 		require.Equal(t, c.Attempt.UncoveredCount, occluded)
 		require.InDelta(t, 420, area, 1e-9)
-		require.Equal(t, support.OcclusionBlocked, c.Occlusion.Class)
 	})
 
 	t.Run("occlusion counts at least the planner's uncovered samples", func(t *testing.T) {
@@ -598,19 +595,18 @@ func TestPrepareOcclusion(t *testing.T) {
 			}
 			failed++
 			require.Positive(t, c.Attempt.UncoveredCount, "candidate %d", c.ID)
-			require.Equal(t, support.OcclusionBlocked, c.Occlusion.Class, "candidate %d", c.ID)
 		}
 		require.Equal(t, 3, failed)
 	})
 
-	t.Run("over the sample limit the occlusion is unknown and null", func(t *testing.T) {
+	t.Run("over the sample limit the occlusion numbers are null", func(t *testing.T) {
 		_, err := prepare(t, newBody(t, (*fixture.Bodies).Bracket), mtilt.Options{KeepOrientation: true, Limits: mtilt.Limits{MaxSamples: 10}})
 		fe := requireFailure(t, err, mtilt.ErrNoFeasibleCandidate)
 		c := fe.Report.Candidates[0]
-		require.Equal(t, support.OcclusionReport{Class: support.OcclusionUnknown}, c.Occlusion)
+		require.Equal(t, support.OcclusionReport{}, c.Occlusion)
 		b, err := json.Marshal(c.Occlusion)
 		require.NoError(t, err)
-		require.JSONEq(t, `{"samples":null,"occluded_samples":null,"occluded_grid_area_mm2":null,"class":"unknown"}`, string(b))
+		require.JSONEq(t, `{"samples":null,"occluded_samples":null,"occluded_grid_area_mm2":null}`, string(b))
 	})
 }
 
