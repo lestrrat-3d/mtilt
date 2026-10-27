@@ -93,15 +93,15 @@ var (
 	}
 	lPlateProfile         = [][2]float64{{0, 0}, {40, 0}, {40, 5}, {5, 5}, {5, 40}, {0, 40}}
 	stackedShelvesProfile = [][2]float64{
-		{0, 0}, {10, 0}, {10, 20}, {30, 20}, {30, 25}, {10, 25},
-		{10, 40}, {30, 40}, {30, 45}, {10, 45}, {10, 50}, {0, 50},
+		{0, 0}, {10, 0}, {10, 20}, {20, 20}, {20, 25}, {10, 25},
+		{10, 40}, {20, 40}, {20, 45}, {10, 45}, {10, 50}, {0, 50},
 	}
 )
 
 // StackedShelves returns a post at X 0..10, 50 mm tall and 20 mm deep along
-// Y, with two 20 mm shelves reaching out to X = 30: a lower one at Z 20..25
+// Y, with two 10 mm shelves reaching out to X = 20: a lower one at Z 20..25
 // and an upper one at Z 40..45. The upper shelf's underside lies straight
-// above the lower shelf, so no pillar from the plate reaches it.
+// above the lower shelf, so no straight pillar from the plate reaches it.
 func StackedShelves() [][3]r3.Vec {
 	return Prism(stackedShelvesProfile, 0, 20)
 }

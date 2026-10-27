@@ -565,24 +565,50 @@ func TestPrepareOcclusion(t *testing.T) {
 		}
 	})
 
-	t.Run("the kept stacked shelves are blocked by their own lower shelf", func(t *testing.T) {
+	t.Run("branches cover all but one of the kept stacked shelves' occluded samples", func(t *testing.T) {
 		_, err := prepare(t, newBody(t, (*fixture.Bodies).StackedShelves), mtilt.Options{KeepOrientation: true})
 		fe := requireFailure(t, err, mtilt.ErrNoFeasibleCandidate)
 		c := fe.Report.Candidates[0]
 		samples, occluded, area := occlusionOf(t, c)
-		require.Equal(t, 840, samples)
-		require.Equal(t, 420, c.Attempt.UncoveredCount)
-		require.Equal(t, c.Attempt.UncoveredCount, occluded)
-		require.InDelta(t, 420, area, 1e-9)
+		require.Equal(t, 420, samples)
+		require.Equal(t, c.Attempt.Samples, samples)
+		// Every upper-shelf sample is occluded by the lower shelf.
+		require.Equal(t, 210, occluded)
+		require.InDelta(t, 210, area, 1e-9)
+		// Branches reach under the upper shelf from beside the lower one
+		// and cover all but one occluded sample.
+		require.Equal(t, 1, c.Attempt.UncoveredCount)
+
+		// Without branches no occluded sample is covered.
+		noBranches := mtilt.ExampleProfile()
+		noBranches.MaxBranchLeanDeg = 0
+		_, err = prepare(t, newBody(t, (*fixture.Bodies).StackedShelves), mtilt.Options{KeepOrientation: true, Profile: noBranches})
+		fe = requireFailure(t, err, mtilt.ErrNoFeasibleCandidate)
+		c = fe.Report.Candidates[0]
+		_, occluded, _ = occlusionOf(t, c)
+		require.Equal(t, 210, occluded)
+		require.Equal(t, occluded, c.Attempt.UncoveredCount)
+	})
+
+	t.Run("the occluded part kept upright is occluded and plans fully", func(t *testing.T) {
+		res, err := prepare(t, newBody(t, (*fixture.Bodies).Occluded), mtilt.Options{KeepOrientation: true})
+		require.NoError(t, err)
+		c := res.Report.Candidates[0]
+		samples, occluded, _ := occlusionOf(t, c)
+		require.Equal(t, 630, samples)
+		require.Equal(t, 630, occluded)
+		require.Equal(t, mtilt.AttemptSucceeded, c.Attempt.Status)
+		require.Zero(t, c.Attempt.UncoveredCount)
 	})
 
 	t.Run("occlusion counts at least the planner's uncovered samples", func(t *testing.T) {
-		// With the plate limit off, the armed stick's three finalists lying
-		// across their arms fail planning. The edge pass covers some
-		// occluded samples (today 66, 63 and 66 occluded against 44, 43
-		// and 37 uncovered), so only the bound is asserted.
+		// With the plate limit off, three finalists lie across the armed
+		// stick's arms. Pillars beside the arms and branches cover most of
+		// their occluded samples; only candidate 2 keeps one uncovered.
 		res, err := prepare(t, newBody(t, (*fixture.Bodies).ArmedStick), mtilt.Options{MaxPlateTiltDeg: 90})
 		require.NoError(t, err)
+		type counts struct{ occluded, uncovered int }
+		got := map[int]counts{}
 		failed := 0
 		for _, c := range res.Report.Candidates {
 			if c.Attempt.Status == mtilt.AttemptNotAttempted {
@@ -590,13 +616,13 @@ func TestPrepareOcclusion(t *testing.T) {
 			}
 			_, occluded, _ := occlusionOf(t, c)
 			require.GreaterOrEqual(t, occluded, c.Attempt.UncoveredCount, "candidate %d", c.ID)
-			if c.Attempt.Status != mtilt.AttemptFailed {
-				continue
+			got[c.ID] = counts{occluded, c.Attempt.UncoveredCount}
+			if c.Attempt.Status == mtilt.AttemptFailed {
+				failed++
 			}
-			failed++
-			require.Positive(t, c.Attempt.UncoveredCount, "candidate %d", c.ID)
 		}
-		require.Equal(t, 3, failed)
+		require.Equal(t, map[int]counts{1: {66, 0}, 2: {63, 1}, 3: {66, 0}, 4: {0, 0}, 5: {0, 0}}, got)
+		require.Equal(t, 1, failed)
 	})
 
 	t.Run("over the sample limit the occlusion numbers are null", func(t *testing.T) {

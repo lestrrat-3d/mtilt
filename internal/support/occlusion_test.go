@@ -70,8 +70,8 @@ func TestOccluded(t *testing.T) {
 	placed, tol := placedAsIs(t, fixture.StackedShelves())
 	occ, err := support.NewOcclusion(t.Context(), placed, params, tol)
 	require.NoError(t, err)
-	// Placement centers the 30 x 20 mm footprint: the shelves span X
-	// -5..15 and Y -10..10.
+	// Placement centers the 20 x 20 mm footprint: the shelves span X
+	// 0..10 and Y -10..10.
 	require.False(t, occ.Occluded(r3.NewVec(5, 0, 20)), "the lower shelf's underside")
 	require.True(t, occ.Occluded(r3.NewVec(5, 0, 40)), "the upper shelf: the line first meets the lower shelf, 20 mm lower")
 	require.True(t, occ.Occluded(r3.NewVec(50, 50, 40)), "nothing above")
@@ -121,19 +121,19 @@ func TestMeasureOcclusion(t *testing.T) {
 		p.MaxBridgeMM = 10
 		p.MaxBridgeTiltDeg = 5
 		rep, plan := measure(t, p, fixture.StackedShelves())
-		// The wall holds each shelf's X = 10 edge: 20 x 21 samples per
+		// The wall holds each shelf's X = 10 edge: 10 x 21 samples per
 		// shelf remain.
-		require.Equal(t, 840, plan.Samples)
-		require.Equal(t, 420, *rep.OccludedSamples)
-		require.Len(t, plan.Uncovered, 420)
+		require.Equal(t, 420, plan.Samples)
+		require.Equal(t, 210, *rep.OccludedSamples)
+		require.Len(t, plan.Uncovered, 210)
 		reasons := map[string]int{}
 		for _, u := range plan.Uncovered {
 			reasons[u.Reason]++
 		}
 		// The planner refuses each upper-shelf position for the pillar
 		// standing there or beside it, never as occluded.
-		require.Equal(t, map[string]int{support.ReasonCollision: 42, support.ReasonCrowded: 378}, reasons)
-		require.InDelta(t, 420*pitch*pitch, *rep.OccludedGridAreaMM2, 1e-9)
+		require.Equal(t, map[string]int{support.ReasonCollision: 42, support.ReasonCrowded: 168}, reasons)
+		require.InDelta(t, 210*pitch*pitch, *rep.OccludedGridAreaMM2, 1e-9)
 	})
 
 	t.Run("sample limit gives no numbers", func(t *testing.T) {
