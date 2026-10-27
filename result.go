@@ -14,13 +14,13 @@ import (
 // Version identifiers recorded in every report.
 const (
 	// SchemaVersion is the version of the Report JSON layout.
-	SchemaVersion = 4
+	SchemaVersion = 5
 	// Version is the mtilt release.
 	Version = "0.1.0-dev"
 	// AlgorithmVersion names the orientation search and the support
 	// strategy. It changes whenever either can produce different output
 	// for the same input and options.
-	AlgorithmVersion = "orient-4/pillar-2"
+	AlgorithmVersion = "orient-5/pillar-2"
 )
 
 // Errors Prepare and Analyze return. Failures that carry a report are
@@ -141,13 +141,16 @@ type ObjectiveReport struct {
 	TiltLimited        bool    `json:"tilt_limited"`
 	// MaxPlateTiltDeg is the plate tilt limit; PlateLimited says whether
 	// it applied (the body is a plate and the limit is under 90).
-	MaxPlateTiltDeg float64      `json:"max_plate_tilt_deg"`
-	PlateLimited    bool         `json:"plate_limited"`
-	CostWeights     CostWeights  `json:"cost_weights"`
-	Scale           orient.Scale `json:"normalization"`
-	Formula         string       `json:"formula"`
-	Selection       string       `json:"selection"`
-	Quantum         float64      `json:"score_quantum"`
+	MaxPlateTiltDeg float64 `json:"max_plate_tilt_deg"`
+	PlateLimited    bool    `json:"plate_limited"`
+	// SupportBand is the band selection used (Options.SupportBand); 0 when
+	// the band is off.
+	SupportBand float64      `json:"support_band"`
+	CostWeights CostWeights  `json:"cost_weights"`
+	Scale       orient.Scale `json:"normalization"`
+	Formula     string       `json:"formula"`
+	Selection   string       `json:"selection"`
+	Quantum     float64      `json:"score_quantum"`
 }
 
 // SearchReport records how much of the search ran and whether a limit cut
@@ -193,6 +196,11 @@ type CandidateReport struct {
 	// support.MeasureOcclusion). It does not affect ranking or selection.
 	Occlusion support.OcclusionReport `json:"occlusion"`
 	Attempt   AttemptReport           `json:"support_attempt"`
+	// SelectionNote says why Prepare selected the candidate or not: one of
+	// "selected", "outside the support band: ...", "first layer ... under
+	// 75% of ...", "lost to candidate N on KEY", "not planned: REASON" or
+	// "plan failed: REASON" (see orient.Select). Analyze writes none.
+	SelectionNote string `json:"selection_note,omitempty"`
 }
 
 // Attempt statuses.

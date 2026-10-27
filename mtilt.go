@@ -206,12 +206,14 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 		TiltLimited:        s.report.Search.Constrained,
 		MaxPlateTiltDeg:    s.opts.MaxPlateTiltDeg,
 		PlateLimited:       s.report.Search.PlateLimited,
+		SupportBand:        s.supportBand(),
 		CostWeights:        s.opts.CostWeights,
 		Scale:              scale,
 		Formula: "cost = volume*support_volume/(surface_area*size) + contact*support_contact/surface_area;" +
 			" the estimate uses the column under each overhang, the planned cost the built pillars",
 		Selection: "only orientations within the long-axis tilt limit, the plate tilt limit and the build volume, with at least the minimum first-layer area; " +
-			"among planned ones the lowest planned cost, then the larger first-layer area, the lower height, the lower long-axis elevation, the lower id",
+			"among planned ones, those whose planned cost is at most (1 + support_band) times the lowest; of those, the ones with at least 75% of their largest first-layer area; " +
+			"of those, the lowest planned cost, then the larger first-layer area, the lower height, the lower long-axis elevation, the lower id",
 		Quantum: orient.ScoreQuantum,
 	}
 
@@ -324,10 +326,13 @@ func (s *session) supportLimits() support.Limits {
 // that exceeds the build volume is skipped. For each of the first
 // Options.Limits.MaxSupportAttempts remaining candidates, Prepare plans
 // supports on the tessellation (see package internal/support) and checks
-// the plan. Among the candidates whose plan covers all demand and passes
-// every check, the one with the lowest planned cost is selected (ties as
-// in Report.Objective). A candidate with no support demand needs no
-// supports.
+// the plan. Prepare collects the candidates whose plan covers all demand
+// and passes every check, then selects one (orient.Select): of those whose
+// planned cost is within Options.SupportBand of the lowest, and that keep
+// at least 75% of the largest first-layer area among them, the one with the
+// lowest planned cost (ties as in Report.Objective). Each candidate's
+// SelectionNote says why it was or was not selected. A candidate with no
+// support demand needs no supports.
 //
 // For the selected candidate only, Prepare adds bodies to body's document:
 // the moved model (body.PlacedCopy; body itself stays live and unchanged)
@@ -352,31 +357,25 @@ func Prepare(ctx context.Context, body *decad.Body, opts Options) (*Result, erro
 
 	params := s.planningParams()
 	lim := s.supportLimits()
-	best := -1
-	var bestPlan *support.Plan
+	plans := make([]*support.Plan, len(s.cands))
+	var planned []orient.Entry
 	for _, id := range order {
 		cr := &s.report.Candidates[id]
-		switch {
-		case !cr.TiltAllowed:
-			cr.Attempt.Reason = fmt.Sprintf("the long axis rises %.1f degrees, over the %.1f degree limit", cr.Metrics.LongAxisElevationDeg, s.opts.MaxLongAxisTiltDeg)
+		if reason := s.skipReason(cr); reason != "" {
+			cr.Attempt.Reason = reason
+			cr.SelectionNote = "not planned: " + reason
 			continue
-		case !cr.PlateAllowed:
-			cr.Attempt.Reason = fmt.Sprintf("the plate normal tilts %.1f degrees from vertical, over the %.1f degree plate limit", cr.Metrics.PlateNormalTiltDeg, s.opts.MaxPlateTiltDeg)
-			continue
-		case cr.Fit == fitExceeds:
-			cr.Attempt.Reason = "the model alone exceeds the build volume"
-			continue
-		case !s.firstLayerOK(cr):
-			cr.Attempt.Reason = fmt.Sprintf("first layer area %.1f mm2 is under the profile's %.1f mm2 minimum", cr.Metrics.FirstLayerAreaMM2, s.opts.Profile.MinFirstLayerAreaMM2)
-			continue
-		case s.report.Search.SupportAttempts == s.opts.Limits.MaxSupportAttempts:
+		}
+		if s.report.Search.SupportAttempts == s.opts.Limits.MaxSupportAttempts {
 			s.report.Search.AttemptLimitReached = true
+			cr.SelectionNote = "not planned: support attempt limit reached"
 			continue
 		}
 		s.report.Search.SupportAttempts++
 		plan, err := s.attempt(ctx, id, params, lim)
 		switch {
 		case errors.Is(err, errAttemptFailed):
+			cr.SelectionNote = "plan failed: " + cr.Attempt.Reason
 			continue
 		case err != nil:
 			return nil, err
@@ -387,18 +386,47 @@ func Prepare(ctx context.Context, body *decad.Body, opts Options) (*Result, erro
 		if len(plan.Pillars) == 0 {
 			cr.Attempt.Status = AttemptNotNeeded
 		}
-		if best < 0 || orient.Less(s.entry(cr, cr.Planned.Score), s.entry(&s.report.Candidates[best], s.report.Candidates[best].Planned.Score)) {
-			best, bestPlan = id, plan
-		}
+		plans[id] = plan
+		planned = append(planned, s.entry(cr, cost.Score))
 	}
-	if best < 0 {
+	if len(planned) == 0 {
 		msg := fmt.Sprintf("%d of %d candidates planned, none succeeded", s.report.Search.SupportAttempts, len(s.cands))
 		if n := s.report.Search.PlateExcluded; n > 0 {
 			msg += fmt.Sprintf("; the plate tilt limit excluded %d otherwise allowed directions", n)
 		}
 		return nil, s.fail(fmt.Errorf("%w: %s", ErrNoFeasibleCandidate, msg))
 	}
-	return s.build(ctx, best, bestPlan)
+	best, notes := orient.Select(planned, s.supportBand())
+	for _, e := range planned {
+		s.report.Candidates[e.ID].SelectionNote = notes[e.ID]
+	}
+	return s.build(ctx, best, plans[best])
+}
+
+// skipReason returns why a candidate is not planned, or "" when it may be:
+// it breaks a tilt limit, exceeds the build volume, or has too small a
+// first layer.
+func (s *session) skipReason(cr *CandidateReport) string {
+	switch {
+	case !cr.TiltAllowed:
+		return fmt.Sprintf("the long axis rises %.1f degrees, over the %.1f degree limit", cr.Metrics.LongAxisElevationDeg, s.opts.MaxLongAxisTiltDeg)
+	case !cr.PlateAllowed:
+		return fmt.Sprintf("the plate normal tilts %.1f degrees from vertical, over the %.1f degree plate limit", cr.Metrics.PlateNormalTiltDeg, s.opts.MaxPlateTiltDeg)
+	case cr.Fit == fitExceeds:
+		return "the model alone exceeds the build volume"
+	case !s.firstLayerOK(cr):
+		return fmt.Sprintf("first layer area %.1f mm2 is under the profile's %.1f mm2 minimum", cr.Metrics.FirstLayerAreaMM2, s.opts.Profile.MinFirstLayerAreaMM2)
+	}
+	return ""
+}
+
+// supportBand returns the band Prepare passes to orient.Select: 0 when the
+// band is off, which keeps only exact score ties.
+func (s *session) supportBand() float64 {
+	if s.opts.SupportBand == NoSupportBand {
+		return 0
+	}
+	return s.opts.SupportBand
 }
 
 // entry describes a candidate for ranking with the given cost score. A

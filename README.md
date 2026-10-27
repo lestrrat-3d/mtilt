@@ -59,7 +59,9 @@ beside the base and branch in under it: 39 tips on 24 bodies.
   (`MaxPlateTiltDeg`), even when standing it on edge would need less support.
 - Searches inside those limits for the orientation with the least support. It estimates support volume and contact
   area for about 2,000 directions spread over the sphere plus every large flat face put down, refines the 8 best,
-  plans real supports for each, and keeps the one whose planned pillars cost least. A direction must also leave at
+  and plans real supports for each. Among the plans within 5% of the cheapest (`SupportBand`), it drops those with
+  under 75% of the largest first layer, and keeps the cheapest of the rest. Neither number is calibrated by a
+  print. Each candidate's `selection_note` says why it was or was not chosen. A direction must also leave at
   least `min_first_layer_area_mm2` on the first layer, so the part does not balance on an edge, and, when the profile
   has a `build_volume`, leave the part no taller than the volume. Each pillar is a base disc, a shaft and a tip
   that narrows to a small contact, and stops `top_contact_gap_mm` below the surface it holds.

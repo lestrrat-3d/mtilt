@@ -173,9 +173,25 @@ edge, with every face at exactly 45 degrees, needs no support and wins while tou
 4. **Refine:** each finalist tries 8 directions around it at the sweep spacing; it moves to the best one that
    passes the same filter and is strictly cheaper, and the step halves whenever none is, down to 0.25 degrees. A
    refined finalist is never worse than where it started.
-5. **Plan:** every finalist whose placed model fits the build volume gets a support plan (section 7). Among the
-   plans that succeed, the lowest planned cost wins; ties go to the larger first-layer area, then the lower height,
-   then the lower elevation, then the lower ID.
+5. **Plan:** every finalist whose placed model fits the build volume gets a support plan (section 7).
+6. **Select:** Prepare collects the plans that succeed, then picks one (`orient.Select`):
+   - With S* the lowest planned cost, the **support band** holds the plans whose cost, rounded to 1e-9, is at most
+     `S* * (1 + SupportBand)` rounded the same way. `SupportBand` defaults to 0.05 and is at most 0.5. The band is
+     anchored on S*, so whether a plan is in it does not depend on the other plans.
+   - With A* the largest first-layer area in the band, a member whose area, rounded to 1e-6, is under 75% of A*
+     drops out. The member with A* stays, so the set is never empty.
+   - The rest are ranked by planned cost, then the larger first-layer area, the lower height, the lower elevation
+     and the lower ID. The first wins.
+   - `NoSupportBand` passes band 0, which keeps only the plans whose cost ties S* at 1e-9. The winner is then the
+     lowest planned cost with the same tie-breaks.
+
+   Neither 0.05 nor 0.75 is calibrated: no print has tested whether a larger first layer is worth that much more
+   support. Stability (`centroid_over_contact_hull`) is not a key, because it ignores the pillars. Each candidate's
+   `selection_note` says why it was or was not selected: `selected`, `outside the support band: score S > L`,
+   `first layer A mm2 under 75% of A* mm2`, `lost to candidate N on KEY` (KEY is the first key that ranks the
+   winner ahead: `score`, `first_layer`, `height`, `elevation` or `id`), `not planned: REASON` (a limit, the build
+   volume, the first-layer floor, or `support attempt limit reached`), or `plan failed: REASON`. Analyze plans
+   nothing and writes no notes.
 
 The result is the best orientation found at this resolution, not a proven global optimum. The report lists the
 given orientation and every finalist with its estimate, planned cost, metrics and outcome. The given orientation is

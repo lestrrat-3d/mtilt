@@ -390,3 +390,75 @@ func TestRank(t *testing.T) {
 	})
 	require.Equal(t, []int{4, 3, 6, 5, 2, 0, 1}, order)
 }
+
+func TestSelect(t *testing.T) {
+	entry := func(id int, score, area float64) orient.Entry {
+		return orient.Entry{ID: id, Feasible: true, Score: score, FirstLayerAreaMM2: area}
+	}
+
+	t.Run("a band member with more first layer wins over a cheaper one with too little", func(t *testing.T) {
+		id, notes := orient.Select([]orient.Entry{entry(1, 1.00, 500), entry(2, 1.03, 900), entry(3, 1.04, 910)}, 0.05)
+		require.Equal(t, 2, id)
+		require.Equal(t, map[int]string{
+			1: "first layer 500.0 mm2 under 75% of 910.0 mm2",
+			2: "selected",
+			3: "lost to candidate 2 on score",
+		}, notes)
+	})
+
+	t.Run("a score over the band is out however large its first layer", func(t *testing.T) {
+		id, notes := orient.Select([]orient.Entry{entry(1, 1.00, 500), entry(2, 1.08, 5000)}, 0.05)
+		require.Equal(t, 1, id)
+		require.Equal(t, "outside the support band: score 1.08 > 1.05", notes[2])
+	})
+
+	t.Run("the largest first layer comes from the band only", func(t *testing.T) {
+		// 2.00's 5000 mm2 would cut both band members if it set A*.
+		id, notes := orient.Select([]orient.Entry{entry(1, 1.00, 500), entry(2, 1.03, 600), entry(3, 2.00, 5000)}, 0.05)
+		require.Equal(t, 1, id)
+		require.Equal(t, map[int]string{
+			1: "selected",
+			2: "lost to candidate 1 on score",
+			3: "outside the support band: score 2 > 1.05",
+		}, notes)
+	})
+
+	t.Run("band 0 keeps only the lowest score", func(t *testing.T) {
+		id, notes := orient.Select([]orient.Entry{entry(1, 1.00, 500), entry(2, 1.03, 900)}, 0)
+		require.Equal(t, 1, id)
+		require.Equal(t, "outside the support band: score 1.03 > 1", notes[2])
+	})
+
+	t.Run("band 0 keeps exact score ties, which compete on first layer", func(t *testing.T) {
+		id, notes := orient.Select([]orient.Entry{entry(1, 0.5, 100), entry(2, 0.5+1e-12, 120)}, 0)
+		require.Equal(t, 2, id)
+		require.Equal(t, "lost to candidate 2 on first_layer", notes[1])
+	})
+
+	t.Run("at a lowest score of 0 the order is Rank's, and each loss names its key", func(t *testing.T) {
+		entries := []orient.Entry{
+			entry(5, 0, 400),
+			{ID: 3, Feasible: true, FirstLayerAreaMM2: 400, HeightMM: 5},
+			{ID: 4, Feasible: true, FirstLayerAreaMM2: 400, ElevationDeg: 3},
+			entry(2, 0, 350),
+			entry(1, 0, 400),
+			entry(6, 1e-3, 400),
+		}
+		id, notes := orient.Select(entries, 0.05)
+		require.Equal(t, orient.Rank(entries)[0], id)
+		require.Equal(t, map[int]string{
+			1: "selected",
+			2: "lost to candidate 1 on first_layer",
+			3: "lost to candidate 1 on height",
+			4: "lost to candidate 1 on elevation",
+			5: "lost to candidate 1 on id",
+			6: "outside the support band: score 0.001 > 0",
+		}, notes)
+	})
+
+	t.Run("no entries", func(t *testing.T) {
+		id, notes := orient.Select(nil, 0.05)
+		require.Equal(t, -1, id)
+		require.Empty(t, notes)
+	})
+}

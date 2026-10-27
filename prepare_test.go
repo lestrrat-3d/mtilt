@@ -12,6 +12,7 @@ import (
 	"github.com/lestrrat-3d/mtilt"
 	"github.com/lestrrat-3d/mtilt/internal/fixture"
 	"github.com/lestrrat-3d/mtilt/internal/mesh"
+	"github.com/lestrrat-3d/mtilt/internal/orient"
 	"github.com/lestrrat-3d/mtilt/internal/support"
 	"github.com/lestrrat-3d/r3"
 	"github.com/lestrrat-3d/units"
@@ -314,6 +315,102 @@ func TestPrepareStrength(t *testing.T) {
 	})
 }
 
+// rankPlanned returns the planned candidates of rep in orient.Rank order:
+// the order the lowest planned cost and the tie-breaks give, with no band.
+func rankPlanned(rep mtilt.Report) []int {
+	var entries []orient.Entry
+	for _, c := range rep.Candidates {
+		if c.Planned == nil {
+			continue
+		}
+		entries = append(entries, orient.Entry{
+			ID: c.ID, Feasible: true, Score: c.Planned.Score, FirstLayerAreaMM2: c.Metrics.FirstLayerAreaMM2,
+			HeightMM: c.Metrics.HeightMM, ElevationDeg: c.Metrics.LongAxisElevationDeg,
+		})
+	}
+	return orient.Rank(entries)
+}
+
+func TestPrepareSelection(t *testing.T) {
+	t.Run("the nail's support band keeps ids 1 and 7, and id 1 wins", func(t *testing.T) {
+		res, err := prepare(t, newBody(t, (*fixture.Bodies).Nail), mtilt.Options{})
+		require.NoError(t, err)
+		require.Equal(t, mtilt.DefaultSupportBand, res.Report.Objective.SupportBand)
+		require.Equal(t, 1, *res.Report.Selected)
+		notes := make([]string, len(res.Report.Candidates))
+		for i, c := range res.Report.Candidates {
+			notes[i] = c.SelectionNote
+		}
+		// Planned scores: id 1 0.00797504, ids 2, 3 and 7 under 1.05 times
+		// that, ids 4 to 6 0.0117631. Id 7 has the band's largest first
+		// layer, 62.77 mm2; ids 2 and 3 have under 75% of it.
+		require.Equal(t, []string{
+			"not planned: the long axis rises 90.0 degrees, over the 15.0 degree limit",
+			"selected",
+			"first layer 31.1 mm2 under 75% of 62.8 mm2",
+			"first layer 26.4 mm2 under 75% of 62.8 mm2",
+			"outside the support band: score 0.0117631 > 0.0083738",
+			"outside the support band: score 0.0117631 > 0.0083738",
+			"outside the support band: score 0.0117631 > 0.0083738",
+			"lost to candidate 1 on score",
+		}, notes)
+	})
+
+	t.Run("NoSupportBand selects what the lowest planned cost and the tie-breaks give", func(t *testing.T) {
+		for _, f := range []shape{(*fixture.Bodies).Nail, (*fixture.Bodies).ObliqueCuboid, (*fixture.Bodies).Stick, (*fixture.Bodies).Bridge} {
+			res, err := prepare(t, newBody(t, f), mtilt.Options{SupportBand: mtilt.NoSupportBand})
+			require.NoError(t, err)
+			require.Zero(t, res.Report.Objective.SupportBand)
+			require.Equal(t, rankPlanned(res.Report)[0], *res.Report.Selected)
+		}
+	})
+
+	t.Run("candidates past the attempt limit say so", func(t *testing.T) {
+		// The upright bridge is allowed and ranks second by estimate, after
+		// the bridge on its side. The search returns one finalist per
+		// attempt, so only the allowed original can be left over.
+		res, err := prepare(t, newBody(t, (*fixture.Bodies).Bridge), mtilt.Options{Limits: mtilt.Limits{MaxSupportAttempts: 1}})
+		require.NoError(t, err)
+		require.True(t, res.Report.Search.AttemptLimitReached)
+		require.Len(t, res.Report.Candidates, 2)
+		require.Equal(t, 1, *res.Report.Selected)
+		require.Equal(t, "selected", res.Report.Candidates[1].SelectionNote)
+		orig := res.Report.Candidates[0]
+		require.True(t, orig.TiltAllowed)
+		require.Equal(t, mtilt.AttemptNotAttempted, orig.Attempt.Status)
+		require.Equal(t, "not planned: support attempt limit reached", orig.SelectionNote)
+
+		// The standing nail keeps its tilt reason under the same limit.
+		res, err = prepare(t, newBody(t, (*fixture.Bodies).Nail), mtilt.Options{Limits: mtilt.Limits{MaxSupportAttempts: 1}})
+		require.NoError(t, err)
+		require.False(t, res.Report.Search.AttemptLimitReached)
+		require.Equal(t, "not planned: the long axis rises 90.0 degrees, over the 15.0 degree limit", res.Report.Candidates[0].SelectionNote)
+		require.Equal(t, "selected", selected(res).SelectionNote)
+	})
+
+	t.Run("a failed plan carries its reason", func(t *testing.T) {
+		p := mtilt.ExampleProfile()
+		p.MaxBridgeMM = 0
+		_, err := prepare(t, newBody(t, (*fixture.Bodies).Slot), mtilt.Options{Profile: p, KeepOrientation: true})
+		fe := requireFailure(t, err, mtilt.ErrNoFeasibleCandidate)
+		c := fe.Report.Candidates[0]
+		require.Contains(t, c.Attempt.Reason, "coverage gap")
+		require.Equal(t, "plan failed: "+c.Attempt.Reason, c.SelectionNote)
+	})
+
+	t.Run("Analyze writes no notes", func(t *testing.T) {
+		a, err := mtilt.Analyze(t.Context(), newBody(t, (*fixture.Bodies).Nail), mtilt.Options{Profile: mtilt.ExampleProfile()})
+		require.NoError(t, err)
+		require.Equal(t, mtilt.DefaultSupportBand, a.Report.Objective.SupportBand)
+		for _, c := range a.Report.Candidates {
+			require.Empty(t, c.SelectionNote, "candidate %d", c.ID)
+		}
+		b, err := json.Marshal(a.Report.Candidates[0])
+		require.NoError(t, err)
+		require.NotContains(t, string(b), "selection_note")
+	})
+}
+
 func TestPreparePlates(t *testing.T) {
 	t.Run("the plate box lies flat; without the limit its on-edge finalists return", func(t *testing.T) {
 		a, err := mtilt.Analyze(t.Context(), newBody(t, (*fixture.Bodies).PlateBox), mtilt.Options{Profile: mtilt.ExampleProfile()})
@@ -555,6 +652,17 @@ func TestPrepareInputErrors(t *testing.T) {
 	t.Run("plate tilt limit out of range", func(t *testing.T) {
 		_, err := prepare(t, newBody(t, (*fixture.Bodies).Cube), mtilt.Options{MaxPlateTiltDeg: -1})
 		require.ErrorContains(t, err, "plate tilt limit")
+	})
+
+	t.Run("support band out of range", func(t *testing.T) {
+		for _, band := range []float64{0.6, -0.5, math.NaN()} {
+			_, err := prepare(t, newBody(t, (*fixture.Bodies).Cube), mtilt.Options{SupportBand: band})
+			require.ErrorIs(t, err, mtilt.ErrInvalidOptions)
+			require.ErrorContains(t, err, "support band")
+		}
+		res, err := prepare(t, newBody(t, (*fixture.Bodies).Cube), mtilt.Options{SupportBand: mtilt.MaxSupportBand})
+		require.NoError(t, err)
+		require.Equal(t, mtilt.MaxSupportBand, res.Report.Objective.SupportBand)
 	})
 
 	t.Run("first-layer floor nothing meets", func(t *testing.T) {
