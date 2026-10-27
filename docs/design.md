@@ -139,7 +139,7 @@ the contact estimate, and that area times its mean height above the plate to the
 it down to the plate. A triangle with any vertex lower than the shortest pillar can reach (`MinHeight + gap`, plus
 the tessellation bound) adds to `too_low_mm2`; no pillar fits there. The column ignores anything of the model
 between the triangle and the plate, so the estimate does not see occluded demand. The report measures it for every
-candidate (section 7.9), but ranking does not use that measurement; a candidate with occluded demand fails only when
+candidate (section 7.10), but ranking does not use that measurement; a candidate with occluded demand fails only when
 planning leaves samples uncovered.
 
 The **planned cost** is measured on the pillars the planner places: their summed analytic volume and their summed
@@ -249,7 +249,7 @@ along one of 8 horizontal lines through it spread over half a turn (`internal/su
 `max_bridge_mm = 0` turns both off. The example profile uses 10 mm and 5 degrees; neither is a measured value. A
 cantilever (one wall) is never a bridge. The search's support estimate (section 5.2) does not apply this rule, so it
 overestimates support for parts with bridges; the planned cost does apply it. The report counts both kinds per
-candidate (`bridged_samples`, `wall_held_samples`). The occlusion measurement (section 7.9) leaves out the same
+candidate (`bridged_samples`, `wall_held_samples`). The occlusion measurement (section 7.10) leaves out the same
 samples, so a bridged or wall-held point is never counted as occluded.
 
 ## 7. Supports
@@ -415,7 +415,7 @@ clearances come from the mesh checks above.
 
 The report lists these under `unchecked`.
 
-### 7.9 Occlusion measurement
+### 7.10 Occlusion measurement
 
 `support.MeasureOcclusion` runs on every candidate's placed mesh, in `Prepare` and `Analyze`, whether or not the
 candidate is planned. It takes the samples the planner would take (section 7.3), with the planner's parameters and
