@@ -21,6 +21,14 @@ Make the support estimate see occlusion (cast the column under each overhang aga
 finalists fail planning, and turn the part about the vertical axis to fit rectangular build volumes. Both change
 `internal/orient/search.go` only.
 
+Two refinements of the strength rules wait for a fixture that needs them:
+
+- Local thickness. The plate rule looks at the whole body's flatness, so it misses thin arms on a part that is not
+  flat as a whole, such as 10 x 1 x 10 mm arms on a body with flatness 0.81. Catching them needs a 3D thickness
+  grid, a `thin_feature_mm` profile value and a rule for combining the regions.
+- Region principal axes. Long-axis and plate rules per region instead of per body need a way to split the body
+  into regions, which mtilt does not have.
+
 ## 4. Removal accessibility
 
 Check that each support can be reached from outside the part's convex hull, and report trapped supports.

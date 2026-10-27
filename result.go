@@ -14,13 +14,13 @@ import (
 // Version identifiers recorded in every report.
 const (
 	// SchemaVersion is the version of the Report JSON layout.
-	SchemaVersion = 2
+	SchemaVersion = 3
 	// Version is the mtilt release.
 	Version = "0.1.0-dev"
 	// AlgorithmVersion names the orientation search and the support
 	// strategy. It changes whenever either can produce different output
 	// for the same input and options.
-	AlgorithmVersion = "orient-2/pillar-2"
+	AlgorithmVersion = "orient-3/pillar-2"
 )
 
 // Errors Prepare and Analyze return. Failures that carry a report are
@@ -120,6 +120,10 @@ type InputReport struct {
 	// along it than across it (see orient.Principal).
 	LongAxis   [3]float64 `json:"long_axis"`
 	Elongation float64    `json:"elongation"`
+	// Flatness is the body's thickness over its width (see
+	// orient.Principal): 0.125 for a 100 x 40 x 5 mm plate, 1 for a cube.
+	// Under 0.2 the plate tilt limit applies.
+	Flatness float64 `json:"flatness"`
 }
 
 // ToleranceReport records the numeric tolerances used (see mesh.Tolerance).
@@ -133,13 +137,17 @@ type ToleranceReport struct {
 type ObjectiveReport struct {
 	// MaxLongAxisTiltDeg is the tilt limit; TiltLimited says whether it
 	// applied (the body has a long axis and the limit is under 90).
-	MaxLongAxisTiltDeg float64      `json:"max_long_axis_tilt_deg"`
-	TiltLimited        bool         `json:"tilt_limited"`
-	CostWeights        CostWeights  `json:"cost_weights"`
-	Scale              orient.Scale `json:"normalization"`
-	Formula            string       `json:"formula"`
-	Selection          string       `json:"selection"`
-	Quantum            float64      `json:"score_quantum"`
+	MaxLongAxisTiltDeg float64 `json:"max_long_axis_tilt_deg"`
+	TiltLimited        bool    `json:"tilt_limited"`
+	// MaxPlateTiltDeg is the plate tilt limit; PlateLimited says whether
+	// it applied (the body is a plate and the limit is under 90).
+	MaxPlateTiltDeg float64      `json:"max_plate_tilt_deg"`
+	PlateLimited    bool         `json:"plate_limited"`
+	CostWeights     CostWeights  `json:"cost_weights"`
+	Scale           orient.Scale `json:"normalization"`
+	Formula         string       `json:"formula"`
+	Selection       string       `json:"selection"`
+	Quantum         float64      `json:"score_quantum"`
 }
 
 // SearchReport records how much of the search ran and whether a limit cut
@@ -170,6 +178,9 @@ type CandidateReport struct {
 	Metrics     orient.Metrics `json:"metrics"`
 	// TiltAllowed is false when the long axis rises above the tilt limit.
 	TiltAllowed bool `json:"tilt_allowed"`
+	// PlateAllowed is false when the plate tilt limit applies and the
+	// plate normal tilts over it.
+	PlateAllowed bool `json:"plate_allowed"`
 	// Fit is "fits", "exceeds" or "unchecked" (no build volume).
 	Fit string `json:"build_volume_fit"`
 	// Estimate is the one-pass support cost estimate (see

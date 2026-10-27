@@ -26,6 +26,11 @@ The oblique cuboid is turned onto its largest face and needs no supports.
 
 ![A tilted box, then the same box flat on the plate](docs/images/oblique-cuboid.png)
 
+The channel plate is 8 mm thick, with a channel under one end. Standing on its 60 mm edge it would need no
+supports; as a plate it stays flat (`MaxPlateTiltDeg`), and 62 pillars hold up the channel's ceiling.
+
+![A flat plate with a channel underneath, then the same plate flat with gold pillars in the channel](docs/images/channel-plate.png)
+
 The square stick is laid down.
 
 ![A stick standing on its end, then lying flat](docs/images/stick.png)
@@ -49,8 +54,10 @@ beside the base and branch in under it: 39 tips on 24 bodies.
 - Tessellates the body with decad (chord tolerance 0.01 mm by default) and plans on that mesh. The planning adds
   decad's proven tessellation bound to every gap and clearance it checks.
 - Puts strength first. FDM parts are weakest across layer lines, so for a part with a long axis, mtilt never picks
-  an orientation that tilts that axis more than 15 degrees (`MaxLongAxisTiltDeg`) from the plate.
-- Searches inside that limit for the orientation with the least support. It estimates support volume and contact
+  an orientation that tilts that axis more than 15 degrees (`MaxLongAxisTiltDeg`) from the plate. A plate
+  (thickness under 0.2 of its width) is printed lying flat: its normal stays within 15 degrees of vertical
+  (`MaxPlateTiltDeg`), even when standing it on edge would need less support.
+- Searches inside those limits for the orientation with the least support. It estimates support volume and contact
   area for about 2,000 directions spread over the sphere plus every large flat face put down, refines the 8 best,
   plans real supports for each, and keeps the one whose planned pillars cost least. A direction must also leave at
   least `min_first_layer_area_mm2` on the first layer, so the part does not balance on an edge. Each pillar is a base

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"testing"
 
@@ -312,6 +313,109 @@ func TestPrepareStrength(t *testing.T) {
 	})
 }
 
+func TestPreparePlates(t *testing.T) {
+	t.Run("the plate box lies flat; without the limit its on-edge finalists return", func(t *testing.T) {
+		a, err := mtilt.Analyze(t.Context(), newBody(t, (*fixture.Bodies).PlateBox), mtilt.Options{Profile: mtilt.ExampleProfile()})
+		require.NoError(t, err)
+		require.InDelta(t, 0.125, a.Report.Input.Flatness, 1e-9)
+		require.True(t, a.Report.Objective.PlateLimited)
+		require.Equal(t, float64(mtilt.DefaultMaxPlateTiltDeg), a.Report.Objective.MaxPlateTiltDeg)
+		require.Positive(t, a.Report.Search.PlateExcluded)
+		for _, c := range a.Report.Candidates {
+			require.True(t, c.PlateAllowed, "candidate %d", c.ID)
+			require.LessOrEqual(t, c.Metrics.PlateNormalTiltDeg, float64(mtilt.DefaultMaxPlateTiltDeg))
+		}
+
+		a, err = mtilt.Analyze(t.Context(), newBody(t, (*fixture.Bodies).PlateBox), mtilt.Options{Profile: mtilt.ExampleProfile(), MaxPlateTiltDeg: 90})
+		require.NoError(t, err)
+		require.False(t, a.Report.Objective.PlateLimited)
+		require.Zero(t, a.Report.Search.PlateExcluded)
+		var onEdge int
+		for _, c := range a.Report.Candidates {
+			if math.Abs(c.Down[1]) > 1-1e-9 {
+				onEdge++
+				require.InDelta(t, 90, c.Metrics.PlateNormalTiltDeg, 1e-9)
+			}
+		}
+		require.Equal(t, 2, onEdge, "d = -Y and d = +Y")
+	})
+
+	t.Run("the channel plate lies flat and its channel gets pillars", func(t *testing.T) {
+		body := newBody(t, (*fixture.Bodies).ChannelPlate)
+		res, err := prepare(t, body, mtilt.Options{})
+		require.NoError(t, err)
+		requireNoFailedCheck(t, res.Report)
+		require.InDelta(t, 0.129, res.Report.Input.Flatness, 5e-4)
+		require.True(t, res.Report.Search.PlateLimited)
+		sel := selected(res)
+		require.True(t, sel.PlateAllowed)
+		require.InDelta(t, 8, sel.Metrics.HeightMM, 1e-6)
+		// X 0..20 and 40..120, 60 mm deep.
+		require.InDelta(t, 6000, sel.Metrics.BedContactAreaMM2, 1e-6)
+		require.NotEmpty(t, res.Supports)
+		requireMovedCopy(t, body, res.Model, res.Transform)
+	})
+
+	t.Run("without the plate limit the channel plate stands on edge", func(t *testing.T) {
+		res, err := prepare(t, newBody(t, (*fixture.Bodies).ChannelPlate), mtilt.Options{MaxPlateTiltDeg: 90})
+		require.NoError(t, err)
+		require.False(t, res.Report.Search.PlateLimited)
+		require.InDelta(t, 60, selected(res).Metrics.HeightMM, 1e-6)
+		require.Empty(t, res.Supports)
+	})
+
+	t.Run("the recess plate is too low flat and fails; without the limit it stands", func(t *testing.T) {
+		body := newBody(t, (*fixture.Bodies).RecessPlate)
+		before := len(body.Document().Bodies())
+		res, err := prepare(t, body, mtilt.Options{})
+		require.Nil(t, res)
+		fe := requireFailure(t, err, mtilt.ErrNoFeasibleCandidate)
+		require.Nil(t, fe.Result)
+		n := fe.Report.Search.PlateExcluded
+		require.Positive(t, n)
+		require.Contains(t, err.Error(), fmt.Sprintf("the plate tilt limit excluded %d", n))
+		orig := fe.Report.Candidates[0].Attempt
+		require.Equal(t, mtilt.AttemptFailed, orig.Status)
+		require.Contains(t, orig.Reason, "too low")
+		require.Len(t, body.Document().Bodies(), before)
+
+		res, err = prepare(t, newBody(t, (*fixture.Bodies).RecessPlate), mtilt.Options{MaxPlateTiltDeg: 90})
+		require.NoError(t, err)
+		require.InDelta(t, 60, selected(res).Metrics.HeightMM, 1e-6)
+	})
+
+	t.Run("the armed stick is both long and flat; every finalist meets both limits", func(t *testing.T) {
+		a, err := mtilt.Analyze(t.Context(), newBody(t, (*fixture.Bodies).ArmedStick), mtilt.Options{Profile: mtilt.ExampleProfile()})
+		require.NoError(t, err)
+		require.InDelta(t, 0.124, a.Report.Input.Flatness, 5e-4)
+		require.True(t, a.Report.Objective.TiltLimited)
+		require.True(t, a.Report.Objective.PlateLimited)
+		require.Greater(t, len(a.Report.Candidates), 1)
+		for _, c := range a.Report.Candidates[1:] {
+			require.True(t, c.TiltAllowed, "candidate %d", c.ID)
+			require.True(t, c.PlateAllowed, "candidate %d", c.ID)
+			require.LessOrEqual(t, c.Metrics.LongAxisElevationDeg, float64(mtilt.DefaultMaxLongAxisTiltDeg))
+			require.LessOrEqual(t, c.Metrics.PlateNormalTiltDeg, float64(mtilt.DefaultMaxPlateTiltDeg))
+		}
+	})
+
+	t.Run("brackets and L-plates are not plates", func(t *testing.T) {
+		for _, f := range []shape{(*fixture.Bodies).Bracket, (*fixture.Bodies).LPlate} {
+			a, err := mtilt.Analyze(t.Context(), newBody(t, f), mtilt.Options{Profile: mtilt.ExampleProfile()})
+			require.NoError(t, err)
+			require.False(t, a.Report.Objective.PlateLimited, "flatness %v", a.Report.Input.Flatness)
+			require.Zero(t, a.Report.Search.PlateExcluded)
+		}
+	})
+
+	t.Run("KeepOrientation ignores the plate limit", func(t *testing.T) {
+		res, err := prepare(t, newBody(t, (*fixture.Bodies).PlateBox), mtilt.Options{KeepOrientation: true})
+		require.NoError(t, err)
+		require.True(t, selected(res).PlateAllowed)
+		require.Zero(t, selected(res).Metrics.PlateNormalTiltDeg)
+	})
+}
+
 func TestPrepareInputErrors(t *testing.T) {
 	t.Run("two lumps", func(t *testing.T) {
 		fb := fixture.NewBodies()
@@ -345,6 +449,11 @@ func TestPrepareInputErrors(t *testing.T) {
 	t.Run("tilt limit out of range", func(t *testing.T) {
 		_, err := prepare(t, newBody(t, (*fixture.Bodies).Cube), mtilt.Options{MaxLongAxisTiltDeg: 91})
 		require.ErrorIs(t, err, mtilt.ErrInvalidOptions)
+	})
+
+	t.Run("plate tilt limit out of range", func(t *testing.T) {
+		_, err := prepare(t, newBody(t, (*fixture.Bodies).Cube), mtilt.Options{MaxPlateTiltDeg: -1})
+		require.ErrorContains(t, err, "plate tilt limit")
 	})
 
 	t.Run("first-layer floor nothing meets", func(t *testing.T) {

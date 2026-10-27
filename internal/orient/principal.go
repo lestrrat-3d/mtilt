@@ -10,7 +10,8 @@ import (
 )
 
 // Principal holds a body's principal axes of inertia: the directions in which
-// its mass is most and least spread out.
+// its mass is most and least spread out. Axes[0] is the long axis; for a
+// plate, Axes[2] is the plate's normal.
 type Principal struct {
 	// Axes are unit vectors sorted by ascending moment. Axes[0] has the
 	// smallest moment of inertia: it is the body's long axis. The three form
@@ -23,6 +24,15 @@ type Principal struct {
 	// longer than the others (a cube, a sphere, a flat square plate), and
 	// close to 1 for a thin stick. It is 0 when Moments[1] is 0.
 	Elongation float64
+	// Spread holds the second moments of the mass along each axis,
+	// descending: Spread[i] = max(0, (Mj + Mk - Mi)/2) for Moments M, with
+	// j and k the other two axes. For a box it is the mass times a^2/12 for
+	// the box's extent a along Axes[i].
+	Spread [3]float64
+	// Flatness is sqrt(Spread[2]/Spread[1]): the body's thickness along
+	// Axes[2] over its width along Axes[1]. It is 0.125 for a
+	// 100 x 40 x 5 mm plate and 1 for a cube. It is 1 when Spread[1] is 0.
+	Flatness float64
 }
 
 // Jacobi iteration limits. A 3x3 symmetric matrix converges to rounding in
@@ -89,6 +99,14 @@ func NewPrincipal(in mesh.InertiaTensor) Principal {
 	pr.Axes[2] = pr.Axes[0].Cross(pr.Axes[1])
 	if pr.Moments[1] > 0 {
 		pr.Elongation = math.Max(0, 1-pr.Moments[0]/pr.Moments[1])
+	}
+	m := pr.Moments
+	for i := range 3 {
+		pr.Spread[i] = math.Max(0, (m[(i+1)%3]+m[(i+2)%3]-m[i])/2)
+	}
+	pr.Flatness = 1
+	if pr.Spread[1] > 0 {
+		pr.Flatness = math.Sqrt(pr.Spread[2] / pr.Spread[1])
 	}
 	return pr
 }

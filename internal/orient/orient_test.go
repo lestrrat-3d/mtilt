@@ -10,6 +10,7 @@ import (
 	"github.com/lestrrat-3d/mtilt/internal/mesh"
 	"github.com/lestrrat-3d/mtilt/internal/orient"
 	"github.com/lestrrat-3d/r3"
+	"github.com/lestrrat-3d/units"
 	"github.com/stretchr/testify/require"
 )
 
@@ -77,6 +78,66 @@ func TestPrincipal(t *testing.T) {
 		require.InDelta(t, 0, pr.Elongation, 1e-9)
 	})
 
+	t.Run("flatness", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			soup  [][3]r3.Vec
+			want  float64
+			delta float64
+			plate bool
+		}{
+			// sqrt((5^2/12) / (40^2/12)) = 5/40.
+			{name: "plate box", soup: fixture.PlateBox(), want: 0.125, delta: 1e-9, plate: true},
+			{name: "channel plate", soup: fixture.ChannelPlate(), want: 0.129, delta: 5e-4, plate: true},
+			{name: "cube", soup: fixture.Cube(), want: 1, delta: 1e-9},
+			{name: "bracket", soup: fixture.Bracket(), want: 0.737, delta: 5e-4},
+			{name: "L-plate", soup: fixture.LPlate(), want: 0.677, delta: 5e-4},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				pr := orient.NewPrincipal(build(t, tc.soup).Inertia())
+				require.InDelta(t, tc.want, pr.Flatness, tc.delta)
+				require.Equal(t, tc.plate, pr.Flatness < orient.MaxPlateFlatness)
+				require.GreaterOrEqual(t, pr.Spread[0], pr.Spread[1])
+				require.GreaterOrEqual(t, pr.Spread[1], pr.Spread[2])
+			})
+		}
+
+		t.Run("plate box spread is the second moment along each axis", func(t *testing.T) {
+			m := build(t, fixture.PlateBox())
+			pr := orient.NewPrincipal(m.Inertia())
+			// Unit density: volume times a^2/12 along X, Y, Z.
+			v := m.Volume()
+			require.InDelta(t, v*100*100/12, pr.Spread[0], 1e-6*v)
+			require.InDelta(t, v*40*40/12, pr.Spread[1], 1e-6*v)
+			require.InDelta(t, v*5*5/12, pr.Spread[2], 1e-6*v)
+			require.InDelta(t, 1, math.Abs(pr.Axes[2].Z), 1e-12, "the plate normal is Z")
+		})
+	})
+
+	t.Run("plate normal tilt", func(t *testing.T) {
+		pr := orient.NewPrincipal(build(t, fixture.PlateBox()).Inertia())
+		require.Zero(t, orient.PlateNormalTilt(pr, r3.Identity()), "as given")
+		// A quarter turn about X stands the plate on its 100 x 5 edge.
+		quarter, err := r3.Rotation(r3.NewVec(1, 0, 0), units.Degrees(90))
+		require.NoError(t, err)
+		require.InDelta(t, 90, orient.PlateNormalTilt(pr, quarter), 1e-9)
+		tilted, err := r3.Rotation(r3.NewVec(1, 0, 0), units.Degrees(10))
+		require.NoError(t, err)
+		require.InDelta(t, 10, orient.PlateNormalTilt(pr, tilted), 1e-9)
+
+		// The channel and the groove make the channel plate lopsided, so
+		// its plate normal leans off Z and lying flat tilts it a little.
+		m := build(t, fixture.ChannelPlate())
+		cp := orient.NewPrincipal(m.Inertia())
+		n := cp.Axes[2]
+		want := math.Atan2(math.Hypot(n.X, n.Y), math.Abs(n.Z)) * 180 / math.Pi
+		require.InDelta(t, 0.5, want, 0.25)
+		cands, _, err := orient.Search(t.Context(), m, cp, estimator(m), searchOpts)
+		require.NoError(t, err)
+		require.InDelta(t, want, cands[0].PlateTiltDeg, 1e-9)
+		require.True(t, cands[0].PlateAllowed)
+	})
+
 	t.Run("rotated tensor gives the rotated axis", func(t *testing.T) {
 		m := build(t, fixture.Box(r3.NewVec(-4, -50, -4), r3.NewVec(4, 50, 4)))
 		rot, err := r3.FromBasis(r3.Basis{
@@ -109,10 +170,12 @@ func FuzzPrincipal(f *testing.F) {
 		require.InDelta(t, 1, pr.Axes[0].Cross(pr.Axes[1]).Dot(pr.Axes[2]), 1e-9)
 		require.LessOrEqual(t, pr.Moments[0], pr.Moments[1])
 		require.LessOrEqual(t, pr.Moments[1], pr.Moments[2])
+		require.GreaterOrEqual(t, pr.Flatness, 0.0)
+		require.LessOrEqual(t, pr.Flatness, 1.0)
 	})
 }
 
-var searchOpts = orient.SearchOptions{Directions: 500, MaxPlanarFaces: 12, Finalists: 6, MaxTiltDeg: 15, MinFirstLayerMM2: 20}
+var searchOpts = orient.SearchOptions{Directions: 500, MaxPlanarFaces: 12, Finalists: 6, MaxTiltDeg: 15, MaxPlateTiltDeg: 15, MinFirstLayerMM2: 20}
 
 func estimator(m *mesh.Mesh) *orient.Estimator {
 	tol := mesh.Tolerance{Length: 1e-9, Serialization: 1e-6, Plate: 4e-6}
@@ -184,6 +247,45 @@ func TestSearch(t *testing.T) {
 		_, stats, err := orient.Search(t.Context(), m, orient.NewPrincipal(m.Inertia()), estimator(m), searchOpts)
 		require.NoError(t, err)
 		require.False(t, stats.Constrained)
+	})
+
+	t.Run("plate box: the plate limit keeps it flat", func(t *testing.T) {
+		m := build(t, fixture.PlateBox())
+		pr := orient.NewPrincipal(m.Inertia())
+		cands, stats, err := orient.Search(t.Context(), m, pr, estimator(m), searchOpts)
+		require.NoError(t, err)
+		require.True(t, stats.Constrained, "elongation %v", pr.Elongation)
+		require.True(t, stats.PlateLimited)
+		// Original, 6 coordinate axes, 6 face clusters, 6 principal axes.
+		require.Equal(t, 19, stats.Seeds)
+		require.Positive(t, stats.PlateExcluded)
+		require.True(t, cands[0].PlateAllowed)
+		require.Zero(t, cands[0].PlateTiltDeg)
+		minCos := math.Cos(15 * math.Pi / 180)
+		for _, c := range cands {
+			require.True(t, c.PlateAllowed, "candidate %d", c.ID)
+			require.GreaterOrEqual(t, math.Abs(c.Down.Z), minCos, "candidate %d", c.ID)
+			require.LessOrEqual(t, c.PlateTiltDeg, 15.0)
+		}
+	})
+
+	t.Run("plate box without the plate limit keeps its on-edge finalists", func(t *testing.T) {
+		m := build(t, fixture.PlateBox())
+		opts := searchOpts
+		opts.MaxPlateTiltDeg = 90
+		cands, stats, err := orient.Search(t.Context(), m, orient.NewPrincipal(m.Inertia()), estimator(m), opts)
+		require.NoError(t, err)
+		require.False(t, stats.PlateLimited)
+		require.Zero(t, stats.PlateExcluded)
+		var onEdge int
+		for _, c := range cands {
+			require.True(t, c.PlateAllowed)
+			if math.Abs(c.Down.Y) > 1-1e-9 {
+				onEdge++
+				require.InDelta(t, 90, c.PlateTiltDeg, 1e-9)
+			}
+		}
+		require.Equal(t, 2, onEdge, "d = +Y and d = -Y")
 	})
 
 	t.Run("finalists are sorted, distinct, and refined ones are no worse", func(t *testing.T) {

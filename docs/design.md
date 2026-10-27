@@ -88,7 +88,8 @@ The tessellation checks are reported with a `tessellation_` prefix. `self_inters
 
 **Strength comes first, then minimal support.** For a part with a long axis, no orientation that tilts the long
 axis more than `MaxLongAxisTiltDeg` (default 15 degrees) from the plate is chosen, however little support it
-needs. Inside that limit mtilt looks for the orientation with the least support.
+needs. For a plate, no orientation that tilts the plate's normal more than `MaxPlateTiltDeg` (default 15 degrees)
+from the vertical is chosen. Inside both limits mtilt looks for the orientation with the least support.
 
 An orientation is described, for support, by its **down direction** d: the input-frame unit vector that ends up
 facing the plate. Turning the part about the vertical axis afterwards changes no overhang and no support, so the
@@ -97,18 +98,28 @@ search runs over directions on the sphere. Each direction's rotation is the mini
 The long axis (`internal/orient/principal.go`), the estimate and the search (`search.go`, `candidates.go`),
 measurement (`measure.go`) and ranking (`rank.go`) are separate.
 
-### 5.1 The long axis
+### 5.1 The long axis and the plate normal
 
 The inertia tensor of the tessellated solid (unit density, about its centroid; `Mesh.Inertia`) is diagonalized by
 Jacobi rotations. Its principal axes, sorted by ascending moment, give the **long axis** (smallest moment) and the
-**elongation** `1 - I1 / I2`: 0 for a cube, a sphere or a square plate, 0.84 for a 100 x 40 x 5 mm plate, and about
-0.99 for an 8 x 8 x 100 mm stick.
-The tilt limit applies when the elongation is at least 0.1. The long axis's **elevation** in direction d is
-`asin(|a . d|)` for long axis a: 0 lying flat, 90 standing up.
+**elongation** `1 - I1 / I2`, where I1 and I2 are the two smallest moments (`Principal.Moments[0]` and
+`Moments[1]`): 0 for a cube, a sphere or a square plate, 0.84 for a 100 x 40 x 5 mm plate, and about 0.99 for an
+8 x 8 x 100 mm stick. The tilt limit applies when the elongation is at least 0.1. The long axis's **elevation** in
+direction d is `asin(|a . d|)` for long axis a: 0 lying flat, 90 standing up.
 
-The limit encodes one rule of FDM printing: a part is weakest across its layer lines, so a slender part standing
-up breaks between layers under a bending load. mtilt runs no load or layer-adhesion analysis; the report lists
-`layer_strength` as unchecked.
+The same axes give the **flatness**. With 0-based moments M (ascending) and axes A, the spread of the mass along
+`A[i]` is `S[i] = max(0, (M[j] + M[k] - M[i]) / 2)` for the other two indices j and k, so S descends. Flatness is
+`sqrt(S[2] / S[1])`, the thickness over the width, and 1 when `S[1]` is 0: 0.125 for a 100 x 40 x 5 mm plate, about
+0.13 for the channel plate fixture, 0.68 for the L-plate, 0.74 for the bracket, and 1 for a cube. A body with
+flatness under 0.2 (`orient.MaxPlateFlatness`) is a **plate**, and `A[2]` is its normal. The plate limit applies to
+a plate when `MaxPlateTiltDeg` is under 90, and allows direction d only when `|A[2] . d| >= cos(MaxPlateTiltDeg)`.
+A body can be both long and a plate; then both limits apply. The report's `plate_normal_tilt_deg` is
+`atan2(hypot(n.x, n.y), |n.z|)` for the rotated normal n: 0 lying flat, 90 on edge. It is reported for every body,
+whether the limit applies or not.
+
+The tilt limit encodes one rule of FDM printing: a part is weakest across its layer lines, so a slender part
+standing up breaks between layers under a bending load. The plate limit is a modelling assumption of the same
+kind. mtilt runs no load or layer-adhesion analysis; the report lists `layer_strength` as unchecked.
 
 ### 5.2 Support cost
 
@@ -144,11 +155,14 @@ edge, with every face at exactly 45 degrees, needs no support and wins while tou
 1. **Seeds:** the given orientation (d = -Z), the six coordinate directions, and the normals of the
    `max_planar_faces` (default 12) largest planar face clusters, so a flat face can sit exactly on the plate.
    Clusters group triangle normals within 1 degree of a seed normal, visiting triangles by decreasing area (ties by
-   normal components), and rank by total area. At most 1024 clusters are tracked.
+   normal components), and rank by total area. At most 1024 clusters are tracked. After the face normals come the
+   six principal directions `+A[0], -A[0], +A[1], -A[1], +A[2], -A[2]` (source `principal_axis`). Seeds come before sweep directions, so a seed wins a tie.
 2. **Sweep:** `sweep_directions` (default 2000) directions spread evenly over the sphere (a Fibonacci lattice),
    about 4.5 degrees apart.
 3. **Filter and rank:** a seed or sweep direction is kept when it is within the tilt limit, meets the first-layer
-   floor, and has no `too_low_mm2`. Kept directions are ranked by estimated cost (rounded to 1e-9), then by lower
+   floor, has no `too_low_mm2`, and is within the plate limit. The report counts the kept directions as
+   `allowed_directions`, and those that meet every other filter but fail the plate limit as
+   `plate_excluded_directions`. Kept directions are ranked by estimated cost (rounded to 1e-9), then by lower
    elevation; the best `max_support_attempts` (default 8) that are at least 1 degree apart become finalists.
 4. **Refine:** each finalist tries 8 directions around it at the sweep spacing; it moves to the best one that
    passes the same filter and is strictly cheaper, and the step halves whenever none is, down to 0.25 degrees. A
@@ -157,8 +171,10 @@ edge, with every face at exactly 45 degrees, needs no support and wins while tou
    wins; ties go to the larger first-layer area, then the lower height, then the lower elevation, then the lower ID.
 
 The result is the best orientation found at this resolution, not a proven global optimum. The report lists the
-given orientation and every finalist with its estimate, planned cost, metrics and outcome. `KeepOrientation`
-skips the search and plans only the given orientation; the tilt limit does not apply to it.
+given orientation and every finalist with its estimate, planned cost, metrics and outcome. The given orientation is
+listed even when it breaks a limit; its `tilt_allowed` and `plate_allowed` say which, and it is not planned then.
+When no candidate succeeds and the plate limit excluded directions, the `ErrNoFeasibleCandidate` message gives
+their count. `KeepOrientation` skips the search and plans only the given orientation; neither limit applies to it.
 
 ### 5.5 Placement and metrics
 
@@ -176,6 +192,7 @@ box. Per candidate, in mm, mm² and degrees:
 | `bed_contact_area_mm2` | area of downward triangles whose three vertices lie within `Plate` of Z = 0 |
 | `centroid_over_contact_hull`, `contact_hull_margin_mm` | whether the centroid's XY projection lies in the convex hull of the bed-contact vertices, and its distance to the nearest hull edge line; `null` when those vertices span no area |
 | `long_axis_elevation_deg` | the long axis's elevation |
+| `plate_normal_tilt_deg` | the angle between `A[2]` and the vertical (section 5.1) |
 
 ## 6. Overhang convention
 

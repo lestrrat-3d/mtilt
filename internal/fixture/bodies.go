@@ -137,6 +137,54 @@ func (b *Bodies) Nail(ctx context.Context) (*decad.Body, error) {
 	return decad.Union(ctx, flange, stick)
 }
 
+// PlateBox returns the 100 x 40 x 5 mm plate of the soup builder PlateBox.
+func (b *Bodies) PlateBox(ctx context.Context) (*decad.Body, error) {
+	return b.Box(ctx, r3.NewVec(0, 0, 0), r3.NewVec(100, 40, 5))
+}
+
+// ChannelPlate returns the channelled plate of the soup builder
+// ChannelPlate. Lying flat, the channel's ceiling at Z = 3 needs support.
+func (b *Bodies) ChannelPlate(ctx context.Context) (*decad.Body, error) {
+	return b.Prism(ctx, channelProfile, 0, 60)
+}
+
+// RecessPlate returns ChannelPlate with the channel 2 mm high and the
+// groove 2 mm deep. Lying flat on either side, the channel's ceiling is
+// 2 mm above the plate: too low for the shortest pillar of the example
+// profile.
+func (b *Bodies) RecessPlate(ctx context.Context) (*decad.Body, error) {
+	return b.Prism(ctx, recessProfile, 0, 60)
+}
+
+// LPlate returns the L-shaped part of the soup builder LPlate.
+func (b *Bodies) LPlate(ctx context.Context) (*decad.Body, error) {
+	return b.Prism(ctx, lPlateProfile, 0, 40)
+}
+
+// ArmedStick returns the 8 x 8 x 100 mm stick of Stick with two flat arms,
+// 2 mm thick along Y (Y 3..5) and spanning Z 40..60, reaching out to X = 48
+// and X = -40. Each arm overlaps the stick by 1 mm. The part is both long
+// (elongation over 0.1) and flat (flatness under 0.2).
+func (b *Bodies) ArmedStick(ctx context.Context) (*decad.Body, error) {
+	stick, err := b.Stick(ctx)
+	if err != nil {
+		return nil, err
+	}
+	right, err := b.Box(ctx, r3.NewVec(7, 3, 40), r3.NewVec(48, 5, 60))
+	if err != nil {
+		return nil, err
+	}
+	left, err := b.Box(ctx, r3.NewVec(-40, 3, 40), r3.NewVec(1, 5, 60))
+	if err != nil {
+		return nil, err
+	}
+	one, err := decad.Union(ctx, stick, right)
+	if err != nil {
+		return nil, err
+	}
+	return decad.Union(ctx, one, left)
+}
+
 // Slot returns a part with a 3 mm wide slot under a beam, 20 mm deep along
 // Y: posts at X 0..10 and X 13..23, joined by a beam at Z 30..40. The slot's
 // ceiling is a 3 mm span between two walls.

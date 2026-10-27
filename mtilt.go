@@ -109,6 +109,7 @@ func newSession(ctx context.Context, body *decad.Body, opts Options) (*session, 
 	s.pr = orient.NewPrincipal(m.Inertia())
 	in.LongAxis = vec3(s.pr.Axes[0])
 	in.Elongation = s.pr.Elongation
+	in.Flatness = s.pr.Flatness
 	return s, nil
 }
 
@@ -171,8 +172,9 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 	if s.opts.KeepOrientation {
 		d := r3.NewVec(0, 0, -1)
 		s.cands = []orient.Candidate{{
-			ID: 0, Source: orient.SourceOriginal, Down: d, Rotation: r3.Identity(), Allowed: true,
-			ElevationDeg: orient.LongAxisElevation(s.pr, r3.Identity()), Estimate: est.Estimate(d),
+			ID: 0, Source: orient.SourceOriginal, Down: d, Rotation: r3.Identity(), Allowed: true, PlateAllowed: true,
+			ElevationDeg: orient.LongAxisElevation(s.pr, r3.Identity()), PlateTiltDeg: orient.PlateNormalTilt(s.pr, r3.Identity()),
+			Estimate: est.Estimate(d),
 		}}
 	} else {
 		cands, stats, err := orient.Search(ctx, s.model, s.pr, est, orient.SearchOptions{
@@ -180,6 +182,7 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 			MaxPlanarFaces:   s.opts.Limits.MaxPlanarFaces,
 			Finalists:        s.opts.Limits.MaxSupportAttempts,
 			MaxTiltDeg:       s.opts.MaxLongAxisTiltDeg,
+			MaxPlateTiltDeg:  s.opts.MaxPlateTiltDeg,
 			MinFirstLayerMM2: s.opts.Profile.MinFirstLayerAreaMM2,
 		})
 		if err != nil {
@@ -192,11 +195,13 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 	s.report.Objective = ObjectiveReport{
 		MaxLongAxisTiltDeg: s.opts.MaxLongAxisTiltDeg,
 		TiltLimited:        s.report.Search.Constrained,
+		MaxPlateTiltDeg:    s.opts.MaxPlateTiltDeg,
+		PlateLimited:       s.report.Search.PlateLimited,
 		CostWeights:        s.opts.CostWeights,
 		Scale:              scale,
 		Formula: "cost = volume*support_volume/(surface_area*size) + contact*support_contact/surface_area;" +
 			" the estimate uses the column under each overhang, the planned cost the built pillars",
-		Selection: "only orientations within the long-axis tilt limit and the build volume, with at least the minimum first-layer area; " +
+		Selection: "only orientations within the long-axis tilt limit, the plate tilt limit and the build volume, with at least the minimum first-layer area; " +
 			"among planned ones the lowest planned cost, then the larger first-layer area, the lower height, the lower long-axis elevation, the lower id",
 		Quantum: orient.ScoreQuantum,
 	}
@@ -215,17 +220,19 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 		s.placed[i], s.full[i] = placed, full
 		met := orient.Measure(placed, s.opts.Profile.OverhangThreshold, s.opts.Profile.PlateAnchorMM, s.opts.Profile.LayerHeightMM, s.tol)
 		met.LongAxisElevationDeg = c.ElevationDeg
+		met.PlateNormalTiltDeg = c.PlateTiltDeg
 		fit := s.fit(placed.Bounds())
 		cr := CandidateReport{
-			ID:          c.ID,
-			Source:      string(c.Source),
-			Down:        vec3(c.Down),
-			Rotation:    rotationRows(c.Rotation),
-			Metrics:     met,
-			TiltAllowed: c.Allowed,
-			Fit:         fit,
-			Estimate:    c.Estimate,
-			Attempt:     AttemptReport{Status: AttemptNotAttempted},
+			ID:           c.ID,
+			Source:       string(c.Source),
+			Down:         vec3(c.Down),
+			Rotation:     rotationRows(c.Rotation),
+			Metrics:      met,
+			TiltAllowed:  c.Allowed,
+			PlateAllowed: c.PlateAllowed,
+			Fit:          fit,
+			Estimate:     c.Estimate,
+			Attempt:      AttemptReport{Status: AttemptNotAttempted},
 		}
 		if c.Source == orient.SourcePlanarFace {
 			n, a := vec3(c.FaceNormal), c.FaceAreaMM2
@@ -332,6 +339,9 @@ func Prepare(ctx context.Context, body *decad.Body, opts Options) (*Result, erro
 		case !cr.TiltAllowed:
 			cr.Attempt.Reason = fmt.Sprintf("the long axis rises %.1f degrees, over the %.1f degree limit", cr.Metrics.LongAxisElevationDeg, s.opts.MaxLongAxisTiltDeg)
 			continue
+		case !cr.PlateAllowed:
+			cr.Attempt.Reason = fmt.Sprintf("the plate normal tilts %.1f degrees from vertical, over the %.1f degree plate limit", cr.Metrics.PlateNormalTiltDeg, s.opts.MaxPlateTiltDeg)
+			continue
 		case cr.Fit == fitExceeds:
 			cr.Attempt.Reason = "the model alone exceeds the build volume"
 			continue
@@ -361,19 +371,22 @@ func Prepare(ctx context.Context, body *decad.Body, opts Options) (*Result, erro
 		}
 	}
 	if best < 0 {
-		return nil, s.fail(fmt.Errorf("%w: %d of %d candidates planned, none succeeded",
-			ErrNoFeasibleCandidate, s.report.Search.SupportAttempts, len(s.cands)))
+		msg := fmt.Sprintf("%d of %d candidates planned, none succeeded", s.report.Search.SupportAttempts, len(s.cands))
+		if n := s.report.Search.PlateExcluded; n > 0 {
+			msg += fmt.Sprintf("; the plate tilt limit excluded %d otherwise allowed directions", n)
+		}
+		return nil, s.fail(fmt.Errorf("%w: %s", ErrNoFeasibleCandidate, msg))
 	}
 	return s.build(ctx, best, bestPlan)
 }
 
 // entry describes a candidate for ranking with the given cost score. A
-// candidate is feasible when it is within the tilt limit, fits the build
+// candidate is feasible when it is within both tilt limits, fits the build
 // volume, and has at least the profile's minimum first-layer area.
 func (s *session) entry(cr *CandidateReport, score float64) orient.Entry {
 	return orient.Entry{
 		ID:                cr.ID,
-		Feasible:          cr.TiltAllowed && cr.Fit != fitExceeds && s.firstLayerOK(cr),
+		Feasible:          cr.TiltAllowed && cr.PlateAllowed && cr.Fit != fitExceeds && s.firstLayerOK(cr),
 		Score:             score,
 		FirstLayerAreaMM2: cr.Metrics.FirstLayerAreaMM2,
 		HeightMM:          cr.Metrics.HeightMM,
