@@ -77,7 +77,8 @@ beside the base and branch in under it: 39 tips on 24 bodies.
 - Fails with a reason, and adds no bodies, when no candidate can be supported. If decad's final check fails after
   the bodies were built, mtilt removes them from the document again.
 - Counts, for every candidate, the demand samples that a straight pillar from the plate cannot reach
-  (`occlusion`). The count does not change which orientation is chosen.
+  (`occlusion`). Branches can still cover those samples, so the count does not predict whether planning fails, and
+  it does not change which orientation is chosen.
 
 The full scope, algorithms and limits are in [docs/design.md](docs/design.md). Planned work is in
 [docs/roadmap.md](docs/roadmap.md).

@@ -17,10 +17,10 @@ choosing between `support` and `model` object types.
 
 ## 3. Better orientation search
 
-Make the support estimate see occlusion (cast the column under each overhang against the model) so fewer
-finalists fail planning. The report already measures occlusion for every candidate (design.md section 7.10), but
-ranking does not use it yet. Also turn the part about the vertical axis to fit rectangular build volumes. Both change
-`internal/orient/search.go` only.
+Make the support estimate see demand that neither a straight pillar nor a branch can reach, so fewer finalists
+fail planning. The report counts the samples a straight pillar cannot reach (design.md section 7.10), but branches
+cover many of those, so that count alone cannot rank candidates. Also turn the part about the vertical axis to fit
+rectangular build volumes. Both change `internal/orient/search.go` only.
 
 Two refinements of the strength rules wait for a fixture that needs them:
 

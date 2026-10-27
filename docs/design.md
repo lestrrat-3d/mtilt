@@ -424,28 +424,31 @@ candidate is planned. It takes the samples the planner would take (section 7.3),
 - meets no triangle;
 - first meets a triangle that is not demand (section 6); or
 - first meets demand more than `support_spacing_mm * max(1, tan(threshold))`, plus the length tolerance, above or
-  below the sample, so a pillar there would hold a different surface.
+  below the sample, so a straight pillar there would hold a different surface.
 
-The candidate's `occlusion` object reports:
+So an occluded sample is one that a straight pillar from the plate below it cannot reach. The candidate's
+`occlusion` object reports:
 
 | Field | Value |
 |---|---|
 | `samples` | the demand samples |
 | `occluded_samples` | the occluded samples |
 | `occluded_grid_area_mm2` | the number of distinct XY positions of occluded samples on the sample lattice (pitch `support_spacing_mm / 4`, anchored at the origin), times the pitch squared |
-| `class` | `blocked`, `clear` or `unknown` |
 
 A sample counts as on the lattice when a lattice point produced it, even when a triangle vertex at the same point
 came first. Lattice points on a region's edges count, so the area can exceed the region's true area by about half
 its perimeter times the pitch: the slot fixture lying on its side has a 600 mm² ceiling and reports 630 mm².
 
-The class is `blocked` when some occluded sample has no clear (not occluded) sample whose position would cover it
-under the coverage rule (section 7.3), and `clear` otherwise. It is a heuristic. A clear sample nearby does not
-prove a pillar fits there, and an occluded sample does not make planning fail when a pillar beside it covers it.
-So `occluded_samples` can exceed the planner's `uncovered_samples`: with the plate limit off, the armed-stick
-fixture's three finalists lying across their arms report 66, 63 and 66 occluded samples, and planning leaves 44, 43
-and 37 uncovered. When the samples would exceed `max_samples`, the class is `unknown` and the three numbers are
-`null`.
+Planning can still cover an occluded sample, with a straight pillar placed beside it (the edge pass, section 7.4)
+or with a branch (section 7.7). So `occluded_samples` can exceed the planner's `uncovered_samples`:
+
+- The occluded part kept upright has 630 occluded samples and plans with none uncovered.
+- With the plate limit off, the armed stick's three finalists lying across their arms have 66, 63 and 66 occluded
+  samples, and planning leaves 0, 1 and 0 uncovered.
+- The stacked shelves kept upright have 210 occluded samples; planning leaves 1 uncovered, and 210 with branches off.
+- The slot on its side has 631 occluded samples, and no branch reaches into the slot: all 631 stay uncovered.
+
+When the samples would exceed `max_samples`, all three numbers are `null`.
 
 The measurement is reported only. It changes no ranking, selection or plan.
 
@@ -471,7 +474,7 @@ The report holds no timing. Two runs with the same body, options and build give 
 | `max_planar_faces` | 12 | fewer face-down seeds |
 | `max_support_attempts` | 8 | the number of finalists planned |
 | `max_supports` | 5,000 | attempt fails |
-| `max_samples` | 500,000 | attempt fails; the candidate's occlusion is `unknown` |
+| `max_samples` | 500,000 | attempt fails; the candidate's occlusion numbers are `null` |
 
 Every long loop checks its `context.Context`. decad's `Verify` time grows with the number of bodies in the
 document. As a dated measurement (2026-10-06, 24-core machine), `Prepare` took about 4 s for the bracket's 41
