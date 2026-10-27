@@ -126,7 +126,7 @@ mtilt has not been tested with any slicer. To keep the parts where mtilt put the
 ```
 go test ./...                          # unit, pipeline and example tests
 go vet ./...
-golangci-lint run                      # v2.12.2, config in .golangci.yml
+golangci-lint run                      # config in .golangci.yml
 cd _gallery && go run .                # regenerate docs/images
 ```
 

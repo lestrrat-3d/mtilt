@@ -33,13 +33,11 @@ procedure + log.
 go test ./...            # MUST pass; ~30 s, most of it decad Verify
 go test -race ./...      # MUST pass
 go vet ./...             # MUST pass
-golangci-lint run        # v2.12.2, config .golangci.yml (copied from kinetograph)
+golangci-lint run        # config .golangci.yml (copied from kinetograph)
 CGO_ENABLED=0 go build ./...
 go test -run '^$' -fuzz FuzzPrincipal -fuzztime 30s ./internal/orient
 cd _gallery && go run .  # regenerate docs/images after changing orientation or supports
 ```
-
-Local `golangci-lint` version MUST match CI's before trusting a clean local run.
 
 ## Hard rules
 
