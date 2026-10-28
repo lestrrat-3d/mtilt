@@ -30,10 +30,11 @@ None of these tests slices or prints anything.
 Record every run in the log below, including failures. Steps:
 
 1. Run `Example_mtilt_prepare` with its temporary directory replaced by a kept one, or write the same program:
-   prepare the bracket with `KeepOrientation` and export the model and every support with `decad/export.STL`.
+   prepare the hook plate with the default options and export the model and every support with
+   `decad/export.STL`.
 2. Note the slicer name and exact version.
 3. Import the model and every support file as parts of one object, so their relative positions are kept.
-4. Confirm the pillars stand under the arm, and that the slicer did not move, center or drop any part.
+4. Confirm the pillars stand under the hook's arm, and that the slicer did not move, center or drop any part.
 5. Turn off the slicer's own supports for the object, and give the support parts 0% infill, 1 perimeter and no top
    or bottom solid layers.
 6. Slice. In the layer preview, confirm:

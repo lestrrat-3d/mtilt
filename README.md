@@ -100,8 +100,9 @@ mtilt needs Go 1.26.8 or later, and no C compiler.
 
 The executable examples are the usage documentation; `go test ./examples/` runs them and checks their output.
 
-- [`examples/mtilt_prepare_example_test.go`](examples/mtilt_prepare_example_test.go) builds a Γ-shaped bracket,
-  keeps it upright so its arm needs 41 pillars, and writes the model and every pillar as STL with
+- [`examples/mtilt_prepare_example_test.go`](examples/mtilt_prepare_example_test.go) builds a wall hook's
+  mounting plate, lets mtilt choose the orientation with the default options (it lies flat as drawn, and 46
+  pillars hold the hook's arm past the plate's edge), and writes the model and every pillar as STL with
   `decad/export`.
 - [`examples/mtilt_strength_example_test.go`](examples/mtilt_strength_example_test.go) gives mtilt a round rod
   standing on its end and shows it laid down, because standing breaks the tilt limit.
