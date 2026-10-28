@@ -42,7 +42,10 @@ const (
 //     mean disjoint bodies. A leaning branch has no such prism; its distance
 //     from other supports is checked while planning and by decad's Verify.
 func ValidateAssembly(ctx context.Context, model *mesh.Mesh, supports []*mesh.Mesh, upright []bool, gap, allowance float64, tol mesh.Tolerance) ([]mesh.Check, error) {
-	ix := newIndex(model)
+	ix, err := newIndex(ctx, model)
+	if err != nil {
+		return nil, err
+	}
 	var topology, plate, contact, topGap []string
 	boxes := make([]mesh.Box, len(supports))
 	for i, s := range supports {
@@ -128,18 +131,25 @@ func ValidateAssembly(ctx context.Context, model *mesh.Mesh, supports []*mesh.Me
 // RecheckPlan re-runs the construction-time checks on a finished plan
 // against the placed model: every pillar's clearance zones are clear of the
 // model, and every demand sample is covered under the coverage rule (see
-// Build).
-func RecheckPlan(placed *mesh.Mesh, plan *Plan, p Params, tol mesh.Tolerance) []mesh.Check {
+// Build). It returns ctx.Err() when ctx is cancelled.
+func RecheckPlan(ctx context.Context, placed *mesh.Mesh, plan *Plan, p Params, tol mesh.Tolerance) ([]mesh.Check, error) {
+	ix, err := newIndex(ctx, placed)
+	if err != nil {
+		return nil, err
+	}
 	b := &builder{
-		ix:    newIndex(placed),
+		ix:    ix,
 		p:     p,
 		eps:   tol.Length,
-		dzMax: p.SpacingMM * math.Max(1, math.Tan(p.ThresholdDeg*math.Pi/180)),
+		dzMax: p.coverDZ(),
 		cells: make(map[[2]int64][]int),
 	}
 	b.lim.MaxSupports = len(plan.Pillars)
 	var zones []string
 	for i, t := range plan.Trees {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		for _, z := range p.trunkZones(t, p.SideClearanceMM) {
 			if ti, hit := b.ix.anyTouching(z, b.eps); hit {
 				zones = append(zones, fmt.Sprintf("tree %d trunk zone touches model triangle %d", i+1, ti))
@@ -148,6 +158,9 @@ func RecheckPlan(placed *mesh.Mesh, plan *Plan, p Params, tol mesh.Tolerance) []
 		}
 	}
 	for i, pl := range plan.Pillars {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		for _, z := range p.clearanceZones(pl) {
 			if ti, hit := b.ix.anyTouching(z, b.eps); hit {
 				zones = append(zones, fmt.Sprintf("support %d zone touches model triangle %d", i+1, ti))
@@ -157,12 +170,17 @@ func RecheckPlan(placed *mesh.Mesh, plan *Plan, p Params, tol mesh.Tolerance) []
 		_ = b.add(pl)
 	}
 	var gaps []string
-	for _, s := range plan.samples {
+	for i, s := range plan.samples {
+		if i%ctxCheckEvery == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		if !b.covered(s) {
 			gaps = append(gaps, fmt.Sprintf("sample %v", s))
 		}
 	}
-	return []mesh.Check{check(CheckClearanceZones, zones), check(CheckCoverage, gaps)}
+	return []mesh.Check{check(CheckClearanceZones, zones), check(CheckCoverage, gaps)}, nil
 }
 
 func check(name string, problems []string) mesh.Check {

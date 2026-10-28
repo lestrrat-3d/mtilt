@@ -1,5 +1,6 @@
 // Package orient searches for the print orientation that needs the least
-// support while keeping a long part's long axis close to flat. The long axis
+// support while keeping a long part's long axis close to flat and a plate
+// lying flat. The long axis
 // (principal.go), the support estimate and search (candidates.go, search.go),
 // measurement (measure.go) and ranking (rank.go) are separate, so each can be
 // improved on its own.
@@ -31,6 +32,8 @@ const (
 	SourceAxis Source = "axis"
 	// SourcePlanarFace puts a dominant flat face on the plate.
 	SourcePlanarFace Source = "planar_face"
+	// SourcePrincipal is one of the six directions +-Principal.Axes[i].
+	SourcePrincipal Source = "principal_axis"
 	// SourceSweep is a direction of the even sweep over the sphere.
 	SourceSweep Source = "sweep"
 	// SourceRefined is a direction local refinement moved to.
@@ -61,8 +64,14 @@ type Candidate struct {
 	// ElevationDeg is the long axis's angle to the plate in this
 	// orientation.
 	ElevationDeg float64
+	// PlateTiltDeg is the plate normal's angle to the vertical in this
+	// orientation (PlateNormalTilt).
+	PlateTiltDeg float64
 	// Allowed is false when the elevation is over the tilt limit.
 	Allowed bool
+	// PlateAllowed is false when the plate tilt limit applies and
+	// PlateTiltDeg is over it.
+	PlateAllowed bool
 	// Estimate is the support cost estimate (see Estimator).
 	Estimate Cost
 }

@@ -83,7 +83,47 @@ var (
 	bracketProfile  = [][2]float64{{0, 0}, {10, 0}, {10, 30}, {40, 30}, {40, 40}, {0, 40}}
 	bridgeProfile   = [][2]float64{{0, 0}, {10, 0}, {10, 30}, {40, 30}, {40, 0}, {50, 0}, {50, 40}, {0, 40}}
 	occludedProfile = [][2]float64{{0, 0}, {40, 0}, {40, 10}, {10, 10}, {10, 40}, {40, 40}, {40, 50}, {0, 50}}
+	channelProfile  = [][2]float64{
+		{0, 0}, {20, 0}, {20, 3}, {40, 3}, {40, 0}, {120, 0},
+		{120, 8}, {100, 8}, {100, 5}, {80, 5}, {80, 8}, {0, 8},
+	}
+	recessProfile = [][2]float64{
+		{0, 0}, {20, 0}, {20, 2}, {40, 2}, {40, 0}, {120, 0},
+		{120, 8}, {100, 8}, {100, 6}, {80, 6}, {80, 8}, {0, 8},
+	}
+	lPlateProfile         = [][2]float64{{0, 0}, {40, 0}, {40, 5}, {5, 5}, {5, 40}, {0, 40}}
+	stackedShelvesProfile = [][2]float64{
+		{0, 0}, {10, 0}, {10, 20}, {20, 20}, {20, 25}, {10, 25},
+		{10, 40}, {20, 40}, {20, 45}, {10, 45}, {10, 50}, {0, 50},
+	}
 )
+
+// StackedShelves returns a post at X 0..10, 50 mm tall and 20 mm deep along
+// Y, with two 10 mm shelves reaching out to X = 20: a lower one at Z 20..25
+// and an upper one at Z 40..45. The upper shelf's underside lies straight
+// above the lower shelf, so no straight pillar from the plate reaches it.
+func StackedShelves() [][3]r3.Vec {
+	return Prism(stackedShelvesProfile, 0, 20)
+}
+
+// PlateBox returns a 100 x 40 x 5 mm box with one corner at the origin: a
+// plate lying flat, with flatness 0.125.
+func PlateBox() [][3]r3.Vec {
+	return Box(r3.NewVec(0, 0, 0), r3.NewVec(100, 40, 5))
+}
+
+// ChannelPlate returns an 8 mm thick plate, 120 x 60 mm, lying flat: a
+// 20 mm wide, 3 mm high channel runs along Y under X 20..40, and a 20 mm
+// wide, 3 mm deep groove along Y over X 80..100.
+func ChannelPlate() [][3]r3.Vec {
+	return Prism(channelProfile, 0, 60)
+}
+
+// LPlate returns an L-shaped profile, 40 mm deep along Y: a 40 x 5 mm leg on
+// the plate and a 5 x 40 mm leg standing at X 0..5.
+func LPlate() [][3]r3.Vec {
+	return Prism(lPlateProfile, 0, 40)
+}
 
 // Bridge returns a Π-shaped part, 20 mm deep along Y: posts at X 0..10 and
 // X 40..50, joined by a beam at Z 30..40. The beam's underside between the

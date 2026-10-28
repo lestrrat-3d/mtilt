@@ -88,7 +88,8 @@ The tessellation checks are reported with a `tessellation_` prefix. `self_inters
 
 **Strength comes first, then minimal support.** For a part with a long axis, no orientation that tilts the long
 axis more than `MaxLongAxisTiltDeg` (default 15 degrees) from the plate is chosen, however little support it
-needs. Inside that limit mtilt looks for the orientation with the least support.
+needs. For a plate, no orientation that tilts the plate's normal more than `MaxPlateTiltDeg` (default 15 degrees)
+from the vertical is chosen. Inside both limits mtilt looks for the orientation with the least support.
 
 An orientation is described, for support, by its **down direction** d: the input-frame unit vector that ends up
 facing the plate. Turning the part about the vertical axis afterwards changes no overhang and no support, so the
@@ -97,17 +98,28 @@ search runs over directions on the sphere. Each direction's rotation is the mini
 The long axis (`internal/orient/principal.go`), the estimate and the search (`search.go`, `candidates.go`),
 measurement (`measure.go`) and ranking (`rank.go`) are separate.
 
-### 5.1 The long axis
+### 5.1 The long axis and the plate normal
 
 The inertia tensor of the tessellated solid (unit density, about its centroid; `Mesh.Inertia`) is diagonalized by
 Jacobi rotations. Its principal axes, sorted by ascending moment, give the **long axis** (smallest moment) and the
-**elongation** `1 - I1 / I2`: 0 for a cube, a sphere or a square plate, and about 0.99 for an 8 x 8 x 100 mm stick.
-The tilt limit applies when the elongation is at least 0.1. The long axis's **elevation** in direction d is
-`asin(|a . d|)` for long axis a: 0 lying flat, 90 standing up.
+**elongation** `1 - I1 / I2`, where I1 and I2 are the two smallest moments (`Principal.Moments[0]` and
+`Moments[1]`): 0 for a cube, a sphere or a square plate, 0.84 for a 100 x 40 x 5 mm plate, and about 0.99 for an
+8 x 8 x 100 mm stick. The tilt limit applies when the elongation is at least 0.1. The long axis's **elevation** in
+direction d is `asin(|a . d|)` for long axis a: 0 lying flat, 90 standing up.
 
-The limit encodes one rule of FDM printing: a part is weakest across its layer lines, so a slender part standing
-up breaks between layers under a bending load. mtilt runs no load or layer-adhesion analysis; the report lists
-`layer_strength` as unchecked.
+The same axes give the **flatness**. With 0-based moments M (ascending) and axes A, the spread of the mass along
+`A[i]` is `S[i] = max(0, (M[j] + M[k] - M[i]) / 2)` for the other two indices j and k, so S descends. Flatness is
+`sqrt(S[2] / S[1])`, the thickness over the width, and 1 when `S[1]` is 0: 0.125 for a 100 x 40 x 5 mm plate, about
+0.13 for the channel plate fixture, 0.68 for the L-plate, 0.74 for the bracket, and 1 for a cube. A body with
+flatness under 0.2 (`orient.MaxPlateFlatness`) is a **plate**, and `A[2]` is its normal. The plate limit applies to
+a plate when `MaxPlateTiltDeg` is under 90, and allows direction d only when `|A[2] . d| >= cos(MaxPlateTiltDeg)`.
+A body can be both long and a plate; then both limits apply. The report's `plate_normal_tilt_deg` is
+`atan2(hypot(n.x, n.y), |n.z|)` for the rotated normal n: 0 lying flat, 90 on edge. It is reported for every body,
+whether the limit applies or not.
+
+The tilt limit encodes one rule of FDM printing: a part is weakest across its layer lines, so a slender part
+standing up breaks between layers under a bending load. The plate limit is a modelling assumption of the same
+kind. mtilt runs no load or layer-adhesion analysis; the report lists `layer_strength` as unchecked.
 
 ### 5.2 Support cost
 
@@ -126,7 +138,9 @@ the plate nor entirely within the plate-anchor height. Each such triangle adds i
 the contact estimate, and that area times its mean height above the plate to the volume estimate: the column under
 it down to the plate. A triangle with any vertex lower than the shortest pillar can reach (`MinHeight + gap`, plus
 the tessellation bound) adds to `too_low_mm2`; no pillar fits there. The column ignores anything of the model
-between the triangle and the plate, so occluded demand is found only by planning.
+between the triangle and the plate, so the estimate does not see occluded demand. The report measures it for every
+candidate (section 7.10), but ranking does not use that measurement; a candidate with occluded demand fails only when
+planning leaves samples uncovered.
 
 The **planned cost** is measured on the pillars the planner places: their summed analytic volume and their summed
 round contact areas, priced with the same formula.
@@ -143,21 +157,47 @@ edge, with every face at exactly 45 degrees, needs no support and wins while tou
 1. **Seeds:** the given orientation (d = -Z), the six coordinate directions, and the normals of the
    `max_planar_faces` (default 12) largest planar face clusters, so a flat face can sit exactly on the plate.
    Clusters group triangle normals within 1 degree of a seed normal, visiting triangles by decreasing area (ties by
-   normal components), and rank by total area. At most 1024 clusters are tracked.
+   normal components), and rank by total area. At most 1024 clusters are tracked. After the face normals come the
+   six principal directions `+A[0], -A[0], +A[1], -A[1], +A[2], -A[2]` (source `principal_axis`). Seeds come before sweep directions, so a seed wins a tie.
 2. **Sweep:** `sweep_directions` (default 2000) directions spread evenly over the sphere (a Fibonacci lattice),
    about 4.5 degrees apart.
-3. **Filter and rank:** a seed or sweep direction is kept when it is within the tilt limit, meets the first-layer
-   floor, and has no `too_low_mm2`. Kept directions are ranked by estimated cost (rounded to 1e-9), then by lower
-   elevation; the best `max_support_attempts` (default 8) that are at least 1 degree apart become finalists.
+3. **Filter and rank:** a seed or sweep direction is kept when it is within the tilt limit, fits the build volume's
+   height, meets the first-layer floor, has no `too_low_mm2`, and is within the plate limit. The model's height in
+   direction d is its vertices' extent along d, which no turn about the vertical axis changes; it must be at most
+   `z_mm - margin_mm`, plus the length tolerance and the tessellation bound. A profile without a build volume skips
+   this filter. The X and Y fit depends on the turn, so it stays a check on each placed candidate (step 5). The
+   report counts the kept directions as `allowed_directions`, and those that meet every other filter but fail the
+   plate limit as `plate_excluded_directions`. Kept directions are ranked by estimated cost (rounded to 1e-9),
+   then by lower elevation; the best `max_support_attempts` (default 8) that are at least 1 degree apart become
+   finalists.
 4. **Refine:** each finalist tries 8 directions around it at the sweep spacing; it moves to the best one that
    passes the same filter and is strictly cheaper, and the step halves whenever none is, down to 0.25 degrees. A
    refined finalist is never worse than where it started.
-5. **Plan:** every finalist gets a support plan (section 7). Among the plans that succeed, the lowest planned cost
-   wins; ties go to the larger first-layer area, then the lower height, then the lower elevation, then the lower ID.
+5. **Plan:** every finalist whose placed model fits the build volume gets a support plan (section 7).
+6. **Select:** Prepare collects the plans that succeed, then picks one (`orient.Select`):
+   - With S* the lowest planned cost, the **support band** holds the plans whose cost, rounded to 1e-9, is at most
+     `S* * (1 + SupportBand)` rounded the same way. `SupportBand` defaults to 0.05 and is at most 0.5. The band is
+     anchored on S*, so whether a plan is in it does not depend on the other plans.
+   - With A* the largest first-layer area in the band, a member whose area, rounded to 1e-6, is under 75% of A*
+     drops out. The member with A* stays, so the set is never empty.
+   - The rest are ranked by planned cost, then the larger first-layer area, the lower height, the lower elevation
+     and the lower ID. The first wins.
+   - `NoSupportBand` passes band 0, which keeps only the plans whose cost ties S* at 1e-9. The winner is then the
+     lowest planned cost with the same tie-breaks.
+
+   Neither 0.05 nor 0.75 is calibrated: no print has tested whether a larger first layer is worth that much more
+   support. Stability (`centroid_over_contact_hull`) is not a key, because it ignores the pillars. Each candidate's
+   `selection_note` says why it was or was not selected: `selected`, `outside the support band: score S > L`,
+   `first layer A mm2 under 75% of A* mm2`, `lost to candidate N on KEY` (KEY is the first key that ranks the
+   winner ahead: `score`, `first_layer`, `height`, `elevation` or `id`), `not planned: REASON` (a limit, the build
+   volume, the first-layer floor, or `support attempt limit reached`), or `plan failed: REASON`. Analyze plans
+   nothing and writes no notes.
 
 The result is the best orientation found at this resolution, not a proven global optimum. The report lists the
-given orientation and every finalist with its estimate, planned cost, metrics and outcome. `KeepOrientation`
-skips the search and plans only the given orientation; the tilt limit does not apply to it.
+given orientation and every finalist with its estimate, planned cost, metrics and outcome. The given orientation is
+listed even when it breaks a limit; its `tilt_allowed` and `plate_allowed` say which, and it is not planned then.
+When no candidate succeeds and the plate limit excluded directions, the `ErrNoFeasibleCandidate` message gives
+their count. `KeepOrientation` skips the search and plans only the given orientation; neither limit applies to it.
 
 ### 5.5 Placement and metrics
 
@@ -175,6 +215,7 @@ box. Per candidate, in mm, mm² and degrees:
 | `bed_contact_area_mm2` | area of downward triangles whose three vertices lie within `Plate` of Z = 0 |
 | `centroid_over_contact_hull`, `contact_hull_margin_mm` | whether the centroid's XY projection lies in the convex hull of the bed-contact vertices, and its distance to the nearest hull edge line; `null` when those vertices span no area |
 | `long_axis_elevation_deg` | the long axis's elevation |
+| `plate_normal_tilt_deg` | the angle between `A[2]` and the vertical (section 5.1) |
 
 ## 6. Overhang convention
 
@@ -208,7 +249,8 @@ along one of 8 horizontal lines through it spread over half a turn (`internal/su
 `max_bridge_mm = 0` turns both off. The example profile uses 10 mm and 5 degrees; neither is a measured value. A
 cantilever (one wall) is never a bridge. The search's support estimate (section 5.2) does not apply this rule, so it
 overestimates support for parts with bridges; the planned cost does apply it. The report counts both kinds per
-candidate (`bridged_samples`, `wall_held_samples`).
+candidate (`bridged_samples`, `wall_held_samples`). The occlusion measurement (section 7.10) leaves out the same
+samples, so a bridged or wall-held point is never counted as occluded.
 
 ## 7. Supports
 
@@ -373,6 +415,43 @@ clearances come from the mesh checks above.
 
 The report lists these under `unchecked`.
 
+### 7.10 Occlusion measurement
+
+`support.MeasureOcclusion` runs on every candidate's placed mesh, in `Prepare` and `Analyze`, whether or not the
+candidate is planned. It takes the samples the planner would take (section 7.3), with the planner's parameters and
+`max_samples`. A sample is **occluded** when the vertical line from the plate up through it:
+
+- meets no triangle;
+- first meets a triangle that is not demand (section 6); or
+- first meets demand more than `support_spacing_mm * max(1, tan(threshold))`, plus the length tolerance, above or
+  below the sample, so a straight pillar there would hold a different surface.
+
+So an occluded sample is one that a straight pillar from the plate below it cannot reach. The candidate's
+`occlusion` object reports:
+
+| Field | Value |
+|---|---|
+| `samples` | the demand samples |
+| `occluded_samples` | the occluded samples |
+| `occluded_grid_area_mm2` | the number of distinct XY positions of occluded samples on the sample lattice (pitch `support_spacing_mm / 4`, anchored at the origin), times the pitch squared |
+
+A sample counts as on the lattice when a lattice point produced it, even when a triangle vertex at the same point
+came first. Lattice points on a region's edges count, so the area can exceed the region's true area by about half
+its perimeter times the pitch: the slot fixture lying on its side has a 600 mm² ceiling and reports 630 mm².
+
+Planning can still cover an occluded sample, with a straight pillar placed beside it (the edge pass, section 7.4)
+or with a branch (section 7.7). So `occluded_samples` can exceed the planner's `uncovered_samples`:
+
+- The occluded part kept upright has 630 occluded samples and plans with none uncovered.
+- With the plate limit off, the armed stick's three finalists lying across their arms have 66, 63 and 66 occluded
+  samples, and planning leaves 0, 1 and 0 uncovered.
+- The stacked shelves kept upright have 210 occluded samples; planning leaves 1 uncovered, and 210 with branches off.
+- The slot on its side has 631 occluded samples, and no branch reaches into the slot: all 631 stay uncovered.
+
+When the samples would exceed `max_samples`, all three numbers are `null`.
+
+The measurement is reported only. It changes no ranking, selection or plan.
+
 ## 8. Result and the document
 
 `Prepare` returns the moved model, the support bodies (numbered by Y, then X, of their tip), the transform and the
@@ -395,7 +474,7 @@ The report holds no timing. Two runs with the same body, options and build give 
 | `max_planar_faces` | 12 | fewer face-down seeds |
 | `max_support_attempts` | 8 | the number of finalists planned |
 | `max_supports` | 5,000 | attempt fails |
-| `max_samples` | 500,000 | attempt fails |
+| `max_samples` | 500,000 | attempt fails; the candidate's occlusion numbers are `null` |
 
 Every long loop checks its `context.Context`. decad's `Verify` time grows with the number of bodies in the
 document. As a dated measurement (2026-10-06, 24-core machine), `Prepare` took about 4 s for the bracket's 41
@@ -413,7 +492,7 @@ itself took milliseconds.
 | `internal/mesh/` | `Mesh`, `FromBody` (decad tessellation), measurements, inertia, `Tolerance`, `Validate` |
 | `internal/overhang/` | overhang angle and triangle classes |
 | `internal/orient/` | long axis, support-cost estimate, direction search, placement, metrics, ranking |
-| `internal/support/` | XY index, separating-axis tests, pillar geometry and bodies, planning, plan and mesh checks |
+| `internal/support/` | XY index, separating-axis tests, pillar geometry and bodies, planning, occlusion measurement, plan and mesh checks |
 | `internal/fixture/` | test shapes as triangle soups and as decad bodies |
 | `profiles/example-fdm.json` | illustrative, uncalibrated profile |
 | `examples/` | executable examples |

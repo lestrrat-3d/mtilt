@@ -6,8 +6,8 @@ ships with tests that check a computed result, and with updates to [design.md](d
 ## 1. Print-validated defaults
 
 Run the calibration procedure in [validation.md](validation.md) on at least one printer, material and slicer.
-Record the results there, and either calibrate `profiles/example-fdm.json` (including `plate_anchor_height_mm`
-and the strength weight) or add a calibrated profile beside it with `"calibrated": true`.
+Record the results there, and either calibrate `profiles/example-fdm.json` (including `plate_anchor_height_mm`)
+or add a calibrated profile beside it with `"calibrated": true`.
 
 ## 2. Assembly export
 
@@ -17,9 +17,18 @@ choosing between `support` and `model` object types.
 
 ## 3. Better orientation search
 
-Make the support estimate see occlusion (cast the column under each overhang against the model) so fewer
-finalists fail planning, and turn the part about the vertical axis to fit rectangular build volumes. Both change
-`internal/orient/search.go` only.
+Make the support estimate see demand that neither a straight pillar nor a branch can reach, so fewer finalists
+fail planning. The report counts the samples a straight pillar cannot reach (design.md section 7.10), but branches
+cover many of those, so that count alone cannot rank candidates. Also turn the part about the vertical axis to fit
+rectangular build volumes. Both change `internal/orient/search.go` only.
+
+Two refinements of the strength rules wait for a fixture that needs them:
+
+- Local thickness. The plate rule looks at the whole body's flatness, so it misses thin arms on a part that is not
+  flat as a whole, such as 10 x 1 x 10 mm arms on a body with flatness 0.81. Catching them needs a 3D thickness
+  grid, a `thin_feature_mm` profile value and a rule for combining the regions.
+- Region principal axes. Long-axis and plate rules per region instead of per body need a way to split the body
+  into regions, which mtilt does not have.
 
 ## 4. Removal accessibility
 

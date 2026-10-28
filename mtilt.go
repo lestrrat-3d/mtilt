@@ -109,6 +109,7 @@ func newSession(ctx context.Context, body *decad.Body, opts Options) (*session, 
 	s.pr = orient.NewPrincipal(m.Inertia())
 	in.LongAxis = vec3(s.pr.Axes[0])
 	in.Elongation = s.pr.Elongation
+	in.Flatness = s.pr.Flatness
 	return s, nil
 }
 
@@ -171,16 +172,27 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 	if s.opts.KeepOrientation {
 		d := r3.NewVec(0, 0, -1)
 		s.cands = []orient.Candidate{{
-			ID: 0, Source: orient.SourceOriginal, Down: d, Rotation: r3.Identity(), Allowed: true,
-			ElevationDeg: orient.LongAxisElevation(s.pr, r3.Identity()), Estimate: est.Estimate(d),
+			ID: 0, Source: orient.SourceOriginal, Down: d, Rotation: r3.Identity(), Allowed: true, PlateAllowed: true,
+			ElevationDeg: orient.LongAxisElevation(s.pr, r3.Identity()), PlateTiltDeg: orient.PlateNormalTilt(s.pr, r3.Identity()),
+			Estimate: est.Estimate(d),
 		}}
 	} else {
+		var maxHeight *float64
+		if v := s.opts.Profile.BuildVolume; v != nil {
+			// The same allowance fit uses for the top of the volume. The XY
+			// fit depends on the turn about the vertical axis and stays a
+			// check on each placed candidate.
+			h := v.ZMM - v.MarginMM + s.tol.Length + s.bound
+			maxHeight = &h
+		}
 		cands, stats, err := orient.Search(ctx, s.model, s.pr, est, orient.SearchOptions{
 			Directions:       s.opts.Limits.SweepDirections,
 			MaxPlanarFaces:   s.opts.Limits.MaxPlanarFaces,
 			Finalists:        s.opts.Limits.MaxSupportAttempts,
 			MaxTiltDeg:       s.opts.MaxLongAxisTiltDeg,
+			MaxPlateTiltDeg:  s.opts.MaxPlateTiltDeg,
 			MinFirstLayerMM2: s.opts.Profile.MinFirstLayerAreaMM2,
+			MaxHeightMM:      maxHeight,
 		})
 		if err != nil {
 			return nil, err
@@ -192,15 +204,21 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 	s.report.Objective = ObjectiveReport{
 		MaxLongAxisTiltDeg: s.opts.MaxLongAxisTiltDeg,
 		TiltLimited:        s.report.Search.Constrained,
+		MaxPlateTiltDeg:    s.opts.MaxPlateTiltDeg,
+		PlateLimited:       s.report.Search.PlateLimited,
+		SupportBand:        s.supportBand(),
 		CostWeights:        s.opts.CostWeights,
 		Scale:              scale,
 		Formula: "cost = volume*support_volume/(surface_area*size) + contact*support_contact/surface_area;" +
 			" the estimate uses the column under each overhang, the planned cost the built pillars",
-		Selection: "only orientations within the long-axis tilt limit and the build volume, with at least the minimum first-layer area; " +
-			"among planned ones the lowest planned cost, then the larger first-layer area, the lower height, the lower long-axis elevation, the lower id",
+		Selection: "only orientations within the long-axis tilt limit, the plate tilt limit and the build volume, with at least the minimum first-layer area; " +
+			"among planned ones, those whose planned cost is at most (1 + support_band) times the lowest; of those, the ones with at least 75% of their largest first-layer area; " +
+			"of those, the lowest planned cost, then the larger first-layer area, the lower height, the lower long-axis elevation, the lower id",
 		Quantum: orient.ScoreQuantum,
 	}
 
+	params := s.planningParams()
+	lim := s.supportLimits()
 	entries := make([]orient.Entry, len(s.cands))
 	s.placed = make([]*mesh.Mesh, len(s.cands))
 	s.full = make([]r3.Transform, len(s.cands))
@@ -215,17 +233,24 @@ func (s *session) evaluate(ctx context.Context) ([]int, error) {
 		s.placed[i], s.full[i] = placed, full
 		met := orient.Measure(placed, s.opts.Profile.OverhangThreshold, s.opts.Profile.PlateAnchorMM, s.opts.Profile.LayerHeightMM, s.tol)
 		met.LongAxisElevationDeg = c.ElevationDeg
+		met.PlateNormalTiltDeg = c.PlateTiltDeg
+		occ, err := support.MeasureOcclusion(ctx, placed, params, lim, s.tol)
+		if err != nil {
+			return nil, err
+		}
 		fit := s.fit(placed.Bounds())
 		cr := CandidateReport{
-			ID:          c.ID,
-			Source:      string(c.Source),
-			Down:        vec3(c.Down),
-			Rotation:    rotationRows(c.Rotation),
-			Metrics:     met,
-			TiltAllowed: c.Allowed,
-			Fit:         fit,
-			Estimate:    c.Estimate,
-			Attempt:     AttemptReport{Status: AttemptNotAttempted},
+			ID:           c.ID,
+			Source:       string(c.Source),
+			Down:         vec3(c.Down),
+			Rotation:     rotationRows(c.Rotation),
+			Metrics:      met,
+			TiltAllowed:  c.Allowed,
+			PlateAllowed: c.PlateAllowed,
+			Fit:          fit,
+			Estimate:     c.Estimate,
+			Occlusion:    occ,
+			Attempt:      AttemptReport{Status: AttemptNotAttempted},
 		}
 		if c.Source == orient.SourcePlanarFace {
 			n, a := vec3(c.FaceNormal), c.FaceAreaMM2
@@ -269,7 +294,7 @@ func (s *session) addUnchecked() {
 		{Property: "slicer_interpretation", Note: "slicers can merge, offset or re-interface support bodies; inspect the sliced preview"},
 		{Property: "bridges", Note: "spans up to max_bridge_mm between two walls are left unsupported; whether the printer bridges them cleanly was not tested"},
 		{Property: "stability", Note: "centroid_over_contact_hull is a geometric heuristic, not a physical simulation"},
-		{Property: "layer_strength", Note: "the strength term scores the long axis's angle to the plate; no load or layer-adhesion analysis was run"},
+		{Property: "layer_strength", Note: "the long-axis tilt limit is a modelling assumption; no load or layer-adhesion analysis was run"},
 	}
 	if s.opts.Profile.BuildVolume == nil {
 		s.report.Unchecked = append(s.report.Unchecked, Unchecked{
@@ -289,6 +314,11 @@ func (s *session) planningParams() support.Params {
 	return p
 }
 
+// supportLimits returns the work limits for one support plan.
+func (s *session) supportLimits() support.Limits {
+	return support.Limits{MaxSupports: s.opts.Limits.MaxSupports, MaxSamples: s.opts.Limits.MaxSamples}
+}
+
 // Prepare orients body for printing and builds breakaway supports for it as
 // decad bodies.
 //
@@ -296,9 +326,13 @@ func (s *session) planningParams() support.Params {
 // that exceeds the build volume is skipped. For each of the first
 // Options.Limits.MaxSupportAttempts remaining candidates, Prepare plans
 // supports on the tessellation (see package internal/support) and checks
-// the plan; the first candidate whose plan covers all demand and passes
-// every check is selected. A candidate with no support demand needs no
-// supports.
+// the plan. Prepare collects the candidates whose plan covers all demand
+// and passes every check, then selects one (orient.Select): of those whose
+// planned cost is within Options.SupportBand of the lowest, and that keep
+// at least 75% of the largest first-layer area among them, the one with the
+// lowest planned cost (ties as in Report.Objective). Each candidate's
+// SelectionNote says why it was or was not selected. A candidate with no
+// support demand needs no supports.
 //
 // For the selected candidate only, Prepare adds bodies to body's document:
 // the moved model (body.PlacedCopy; body itself stays live and unchanged)
@@ -322,29 +356,26 @@ func Prepare(ctx context.Context, body *decad.Body, opts Options) (*Result, erro
 	}
 
 	params := s.planningParams()
-	lim := support.Limits{MaxSupports: s.opts.Limits.MaxSupports, MaxSamples: s.opts.Limits.MaxSamples}
-	best := -1
-	var bestPlan *support.Plan
+	lim := s.supportLimits()
+	plans := make([]*support.Plan, len(s.cands))
+	var planned []orient.Entry
 	for _, id := range order {
 		cr := &s.report.Candidates[id]
-		switch {
-		case !cr.TiltAllowed:
-			cr.Attempt.Reason = fmt.Sprintf("the long axis rises %.1f degrees, over the %.1f degree limit", cr.Metrics.LongAxisElevationDeg, s.opts.MaxLongAxisTiltDeg)
+		if reason := s.skipReason(cr); reason != "" {
+			cr.Attempt.Reason = reason
+			cr.SelectionNote = "not planned: " + reason
 			continue
-		case cr.Fit == fitExceeds:
-			cr.Attempt.Reason = "the model alone exceeds the build volume"
-			continue
-		case !s.firstLayerOK(cr):
-			cr.Attempt.Reason = fmt.Sprintf("first layer area %.1f mm2 is under the profile's %.1f mm2 minimum", cr.Metrics.FirstLayerAreaMM2, s.opts.Profile.MinFirstLayerAreaMM2)
-			continue
-		case s.report.Search.SupportAttempts == s.opts.Limits.MaxSupportAttempts:
+		}
+		if s.report.Search.SupportAttempts == s.opts.Limits.MaxSupportAttempts {
 			s.report.Search.AttemptLimitReached = true
+			cr.SelectionNote = "not planned: support attempt limit reached"
 			continue
 		}
 		s.report.Search.SupportAttempts++
 		plan, err := s.attempt(ctx, id, params, lim)
 		switch {
 		case errors.Is(err, errAttemptFailed):
+			cr.SelectionNote = "plan failed: " + cr.Attempt.Reason
 			continue
 		case err != nil:
 			return nil, err
@@ -355,24 +386,56 @@ func Prepare(ctx context.Context, body *decad.Body, opts Options) (*Result, erro
 		if len(plan.Pillars) == 0 {
 			cr.Attempt.Status = AttemptNotNeeded
 		}
-		if best < 0 || orient.Less(s.entry(cr, cr.Planned.Score), s.entry(&s.report.Candidates[best], s.report.Candidates[best].Planned.Score)) {
-			best, bestPlan = id, plan
+		plans[id] = plan
+		planned = append(planned, s.entry(cr, cost.Score))
+	}
+	if len(planned) == 0 {
+		msg := fmt.Sprintf("%d of %d candidates planned, none succeeded", s.report.Search.SupportAttempts, len(s.cands))
+		if n := s.report.Search.PlateExcluded; n > 0 {
+			msg += fmt.Sprintf("; the plate tilt limit excluded %d otherwise allowed directions", n)
 		}
+		return nil, s.fail(fmt.Errorf("%w: %s", ErrNoFeasibleCandidate, msg))
 	}
-	if best < 0 {
-		return nil, s.fail(fmt.Errorf("%w: %d of %d candidates planned, none succeeded",
-			ErrNoFeasibleCandidate, s.report.Search.SupportAttempts, len(s.cands)))
+	best, notes := orient.Select(planned, s.supportBand())
+	for _, e := range planned {
+		s.report.Candidates[e.ID].SelectionNote = notes[e.ID]
 	}
-	return s.build(ctx, best, bestPlan)
+	return s.build(ctx, best, plans[best])
+}
+
+// skipReason returns why a candidate is not planned, or "" when it may be:
+// it breaks a tilt limit, exceeds the build volume, or has too small a
+// first layer.
+func (s *session) skipReason(cr *CandidateReport) string {
+	switch {
+	case !cr.TiltAllowed:
+		return fmt.Sprintf("the long axis rises %.1f degrees, over the %.1f degree limit", cr.Metrics.LongAxisElevationDeg, s.opts.MaxLongAxisTiltDeg)
+	case !cr.PlateAllowed:
+		return fmt.Sprintf("the plate normal tilts %.1f degrees from vertical, over the %.1f degree plate limit", cr.Metrics.PlateNormalTiltDeg, s.opts.MaxPlateTiltDeg)
+	case cr.Fit == fitExceeds:
+		return "the model alone exceeds the build volume"
+	case !s.firstLayerOK(cr):
+		return fmt.Sprintf("first layer area %.1f mm2 is under the profile's %.1f mm2 minimum", cr.Metrics.FirstLayerAreaMM2, s.opts.Profile.MinFirstLayerAreaMM2)
+	}
+	return ""
+}
+
+// supportBand returns the band Prepare passes to orient.Select: 0 when the
+// band is off, which keeps only exact score ties.
+func (s *session) supportBand() float64 {
+	if s.opts.SupportBand == NoSupportBand {
+		return 0
+	}
+	return s.opts.SupportBand
 }
 
 // entry describes a candidate for ranking with the given cost score. A
-// candidate is feasible when it is within the tilt limit, fits the build
+// candidate is feasible when it is within both tilt limits, fits the build
 // volume, and has at least the profile's minimum first-layer area.
 func (s *session) entry(cr *CandidateReport, score float64) orient.Entry {
 	return orient.Entry{
 		ID:                cr.ID,
-		Feasible:          cr.TiltAllowed && cr.Fit != fitExceeds && s.firstLayerOK(cr),
+		Feasible:          cr.TiltAllowed && cr.PlateAllowed && cr.Fit != fitExceeds && s.firstLayerOK(cr),
 		Score:             score,
 		FirstLayerAreaMM2: cr.Metrics.FirstLayerAreaMM2,
 		HeightMM:          cr.Metrics.HeightMM,
@@ -418,7 +481,11 @@ func (s *session) attempt(ctx context.Context, id int, params support.Params, li
 		cr.Attempt.Uncovered = plan.Uncovered[:min(n, maxUncoveredListed)]
 		return failed(fmt.Sprintf("coverage gap: %d of %d demand samples uncovered; first: %s", n, plan.Samples, plan.Uncovered[0].Reason))
 	}
-	for _, c := range support.RecheckPlan(placed, plan, params, s.tol) {
+	checks, err := support.RecheckPlan(ctx, placed, plan, params, s.tol)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range checks {
 		if c.Status == mesh.StatusFailed {
 			return failed(fmt.Sprintf("plan check %s failed: %s", c.Name, c.Detail))
 		}

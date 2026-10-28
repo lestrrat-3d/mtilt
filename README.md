@@ -26,21 +26,33 @@ The oblique cuboid is turned onto its largest face and needs no supports.
 
 ![A tilted box, then the same box flat on the plate](docs/images/oblique-cuboid.png)
 
+The channel plate is 8 mm thick, with a channel under one end. Standing on its 60 mm edge it would need no
+supports; as a plate it stays flat (`MaxPlateTiltDeg`), and 62 pillars hold up the channel's ceiling.
+
+![A flat plate with a channel underneath, then the same plate flat with gold pillars in the channel](docs/images/channel-plate.png)
+
 The square stick is laid down.
 
 ![A stick standing on its end, then lying flat](docs/images/stick.png)
 
-The bracket and the bridge are kept upright (`KeepOrientation`) to show the pillars under an overhang and under a
-span: 41 and 37 pillars.
+The mounting bracket is a 4 mm plate with a boss and a hook along one edge. As a plate it lies flat, and the search
+keeps the side it was given: upside down it would rest on the hook's lip with the whole plate above the bed. 46
+pillars hold the hook's arm where it reaches 12 mm past the plate's edge.
 
-![A bracket with its arm held up by gold pillars](docs/images/bracket-kept.png)
+![A flat plate with a boss and an edge hook, then the same plate with gold pillars under the hook's arm](docs/images/bracket.png)
 
-![A bridge with its span held up by gold pillars](docs/images/bridge-kept.png)
+The bridge-ledge part is a plate with a deck along one edge. The deck spans 8 mm from the plate's edge to a leg,
+then reaches 18 mm past the leg. The span is under `max_bridge_mm`, so it gets no pillars; 61 pillars hold the
+ledge past the leg.
 
-The ⊐-shaped part, kept upright, has an arm over its own base, so no straight pillar reaches the arm. Trees stand
-beside the base and branch in under it: 39 tips on 24 bodies.
+![A plate with a deck over a narrow gap and a ledge, then gold pillars under the ledge only](docs/images/bridge-ledge.png)
 
-![A C-shaped part whose top arm is held by gold trees that branch in from beside its base](docs/images/occluded-kept.png)
+The ⊐-shaped housing has its top over its base, so no straight pillar reaches the top's underside. Its mounting
+plate stands 2 mm proud of the back and both sides, and its top reaches 2 mm past the base: on its back, a side or
+its front, a face would hang 2 mm over the bed, too low for any pillar. The search keeps it upright, and 17
+branches and 13 trees stand beside the base and lean in under the top: 47 tips on 30 bodies.
+
+![A C-shaped housing, then gold branches and trees that lean in from beside its base under its top](docs/images/housing.png)
 
 ## What it does now
 
@@ -49,13 +61,17 @@ beside the base and branch in under it: 39 tips on 24 bodies.
 - Tessellates the body with decad (chord tolerance 0.01 mm by default) and plans on that mesh. The planning adds
   decad's proven tessellation bound to every gap and clearance it checks.
 - Puts strength first. FDM parts are weakest across layer lines, so for a part with a long axis, mtilt never picks
-  an orientation that tilts that axis more than 15 degrees (`MaxLongAxisTiltDeg`) from the plate.
-- Searches inside that limit for the orientation with the least support. It estimates support volume and contact
+  an orientation that tilts that axis more than 15 degrees (`MaxLongAxisTiltDeg`) from the plate. A plate
+  (thickness under 0.2 of its width) is printed lying flat: its normal stays within 15 degrees of vertical
+  (`MaxPlateTiltDeg`), even when standing it on edge would need less support.
+- Searches inside those limits for the orientation with the least support. It estimates support volume and contact
   area for about 2,000 directions spread over the sphere plus every large flat face put down, refines the 8 best,
-  plans real supports for each, and keeps the one whose planned pillars cost least. A direction must also leave at
-  least `min_first_layer_area_mm2` on the first layer, so the part does not balance on an edge. Each pillar is a base
-  disc, a shaft and a tip that narrows to a small contact, and stops `top_contact_gap_mm` below the surface it
-  holds.
+  and plans real supports for each. Among the plans within 5% of the cheapest (`SupportBand`), it drops those with
+  under 75% of the largest first layer, and keeps the cheapest of the rest. Neither number is calibrated by a
+  print. Each candidate's `selection_note` says why it was or was not chosen. A direction must also leave at
+  least `min_first_layer_area_mm2` on the first layer, so the part does not balance on an edge, and, when the profile
+  has a `build_volume`, leave the part no taller than the volume. Each pillar is a base disc, a shaft and a tip
+  that narrows to a small contact, and stops `top_contact_gap_mm` below the surface it holds.
 - Leaves short spans between two walls unsupported (up to `max_bridge_mm`, 10 mm in the example profile), because
   the printer draws them in the air, and leaves points that sit on top of a wall to that wall.
 - For the selected candidate only, adds the moved model (`PlacedCopy`; the input stays live) and one revolved
@@ -67,6 +83,9 @@ beside the base and branch in under it: 39 tips on 24 bodies.
   decad body, and trunks wide enough get a sealed bore so they print hollow.
 - Fails with a reason, and adds no bodies, when no candidate can be supported. If decad's final check fails after
   the bodies were built, mtilt removes them from the document again.
+- Counts, for every candidate, the demand samples that a straight pillar from the plate cannot reach
+  (`occlusion`). Branches can still cover those samples, so the count does not predict whether planning fails, and
+  it does not change which orientation is chosen.
 
 The full scope, algorithms and limits are in [docs/design.md](docs/design.md). Planned work is in
 [docs/roadmap.md](docs/roadmap.md).
@@ -81,8 +100,9 @@ mtilt needs Go 1.26.8 or later, and no C compiler.
 
 The executable examples are the usage documentation; `go test ./examples/` runs them and checks their output.
 
-- [`examples/mtilt_prepare_example_test.go`](examples/mtilt_prepare_example_test.go) builds a Γ-shaped bracket,
-  keeps it upright so its arm needs 41 pillars, and writes the model and every pillar as STL with
+- [`examples/mtilt_prepare_example_test.go`](examples/mtilt_prepare_example_test.go) builds a wall hook's
+  mounting plate, lets mtilt choose the orientation with the default options (it lies flat as drawn, and 46
+  pillars hold the hook's arm past the plate's edge), and writes the model and every pillar as STL with
   `decad/export`.
 - [`examples/mtilt_strength_example_test.go`](examples/mtilt_strength_example_test.go) gives mtilt a round rod
   standing on its end and shows it laid down, because standing breaks the tilt limit.
@@ -115,7 +135,7 @@ mtilt has not been tested with any slicer. To keep the parts where mtilt put the
 ```
 go test ./...                          # unit, pipeline and example tests
 go vet ./...
-golangci-lint run                      # v2.12.2, config in .golangci.yml
+golangci-lint run                      # config in .golangci.yml
 cd _gallery && go run .                # regenerate docs/images
 ```
 

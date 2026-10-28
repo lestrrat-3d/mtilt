@@ -74,7 +74,10 @@ type Profile struct {
 	// straight pillars only.
 	MaxBranchLeanDeg float64 `json:"max_branch_lean_deg"`
 
-	// BuildVolume is optional. Without it, fit is reported as unchecked.
+	// BuildVolume is optional. With it, the search keeps only directions
+	// whose model height fits ZMM - MarginMM, and every placed candidate
+	// and its supports are checked against the whole volume. Without it,
+	// fit is reported as unchecked.
 	BuildVolume *BuildVolume `json:"build_volume,omitempty"`
 }
 
@@ -257,6 +260,22 @@ func DefaultCostWeights() CostWeights {
 // MaxLongAxisTiltDeg is 0.
 const DefaultMaxLongAxisTiltDeg = 15
 
+// DefaultMaxPlateTiltDeg is the plate tilt limit Options uses when
+// MaxPlateTiltDeg is 0.
+const DefaultMaxPlateTiltDeg = 15
+
+// DefaultSupportBand is the support band Options uses when SupportBand is 0.
+// It is not calibrated by any print.
+const DefaultSupportBand = 0.05
+
+// MaxSupportBand is the widest support band Options accepts.
+const MaxSupportBand = 0.5
+
+// NoSupportBand as Options.SupportBand turns the support band off: only
+// candidates whose planned cost ties the lowest one compete on the
+// tie-breaks.
+const NoSupportBand = -1
+
 // Limits bound the work Prepare and Analyze do. A zero field means the
 // default listed beside it.
 type Limits struct {
@@ -273,8 +292,9 @@ type Limits struct {
 	MaxSupportAttempts int `json:"max_support_attempts"`
 	// MaxSupports caps the pillars in one attempt. Default 5,000.
 	MaxSupports int `json:"max_supports"`
-	// MaxSamples caps the support-demand samples in one attempt. Default
-	// 500,000.
+	// MaxSamples caps the support-demand samples in one attempt and in each
+	// candidate's occlusion measurement; past it the attempt fails and the
+	// occlusion numbers are null. Default 500,000.
 	MaxSamples int `json:"max_samples"`
 }
 
@@ -308,6 +328,20 @@ type Options struct {
 	// least 0.1). 0 means DefaultMaxLongAxisTiltDeg; 90 turns the limit
 	// off.
 	MaxLongAxisTiltDeg float64
+	// MaxPlateTiltDeg is the largest angle, in degrees, between a plate's
+	// normal (its thinnest principal direction) and the vertical: a plate
+	// is printed lying flat, not on its edge, however little support the
+	// edge needs. It applies only to plates (flatness under 0.2, see
+	// Report.Input.Flatness). 0 means DefaultMaxPlateTiltDeg; 90 turns the
+	// limit off.
+	MaxPlateTiltDeg float64
+	// SupportBand is a fraction of the lowest planned cost. Planned
+	// candidates that cost at most that much more than the lowest form the
+	// support band; a band member with under 75% of the band's largest
+	// first-layer area drops out, and the rest are ranked by cost, then the
+	// tie-breaks (see Report.Objective). It is in (0, MaxSupportBand]. 0
+	// means DefaultSupportBand; NoSupportBand turns the band off.
+	SupportBand float64
 	// CostWeights default to DefaultCostWeights when both are zero.
 	CostWeights CostWeights
 	// ChordToleranceMM is the chord tolerance the body is tessellated with
@@ -316,7 +350,7 @@ type Options struct {
 	ChordToleranceMM float64
 	// KeepOrientation evaluates only the input orientation. The model is
 	// still translated onto the plate, and the translation is reported.
-	// The tilt limit does not apply.
+	// Neither tilt limit applies.
 	KeepOrientation bool
 	Limits          Limits
 }
@@ -338,6 +372,18 @@ func (o Options) normalized() (Options, error) {
 	}
 	if !(o.MaxLongAxisTiltDeg > 0 && o.MaxLongAxisTiltDeg <= 90) {
 		return Options{}, fmt.Errorf("%w: long-axis tilt limit must be in (0, 90] degrees", ErrInvalidOptions)
+	}
+	if o.MaxPlateTiltDeg == 0 {
+		o.MaxPlateTiltDeg = DefaultMaxPlateTiltDeg
+	}
+	if !(o.MaxPlateTiltDeg > 0 && o.MaxPlateTiltDeg <= 90) {
+		return Options{}, fmt.Errorf("%w: plate tilt limit must be in (0, 90] degrees", ErrInvalidOptions)
+	}
+	if o.SupportBand == 0 {
+		o.SupportBand = DefaultSupportBand
+	}
+	if o.SupportBand != NoSupportBand && !(o.SupportBand > 0 && o.SupportBand <= MaxSupportBand) {
+		return Options{}, fmt.Errorf("%w: support band must be in (0, %v], or NoSupportBand", ErrInvalidOptions, MaxSupportBand)
 	}
 	if o.ChordToleranceMM == 0 {
 		o.ChordToleranceMM = DefaultChordToleranceMM

@@ -83,12 +83,26 @@ type Metrics struct {
 	// 0 when the long axis lies flat, 90 when it stands up. Measure leaves
 	// it 0; the caller sets it with LongAxisElevation.
 	LongAxisElevationDeg float64 `json:"long_axis_elevation_deg"`
+	// PlateNormalTiltDeg is the angle between the body's plate normal
+	// (Principal.Axes[2], rotated with the candidate) and the vertical: 0
+	// when the flat side lies on the plate, 90 on edge. Measure leaves it
+	// 0; the caller sets it with PlateNormalTilt.
+	PlateNormalTiltDeg float64 `json:"plate_normal_tilt_deg"`
 }
 
 // LongAxisElevation returns the elevation in degrees of pr's long axis after
 // rot.
 func LongAxisElevation(pr Principal, rot r3.Transform) float64 {
 	return ElevationDeg(rot.ApplyDir(pr.Axes[0]))
+}
+
+// PlateNormalTilt returns the angle in degrees between pr's plate normal
+// (Axes[2]) after rot and the vertical: atan2(hypot(n.X, n.Y), |n.Z|) for
+// the rotated normal n, 0 when the body's flat side lies on the plate and 90
+// when it stands on edge.
+func PlateNormalTilt(pr Principal, rot r3.Transform) float64 {
+	n := rot.ApplyDir(pr.Axes[2])
+	return math.Atan2(math.Hypot(n.X, n.Y), math.Abs(n.Z)) * 180 / math.Pi
 }
 
 // Measure computes the metrics of a placed model. thresholdDeg is the

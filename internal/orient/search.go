@@ -113,6 +113,18 @@ func (e *Estimator) FirstLayer(d r3.Vec) float64 {
 	return e.mesh.SectionArea(up, base+e.layer)
 }
 
+// Height returns the model's height, in mm, when down direction d faces the
+// plate: its vertices' extent along d. Turning the model about the vertical
+// axis does not change it.
+func (e *Estimator) Height(d r3.Vec) float64 {
+	lo, hi := math.Inf(1), math.Inf(-1)
+	for _, v := range e.verts {
+		h := -v.Dot(d)
+		lo, hi = math.Min(lo, h), math.Max(hi, h)
+	}
+	return hi - lo
+}
+
 // SearchOptions configure Search.
 type SearchOptions struct {
 	// Directions is the number of directions in the even sweep.
@@ -125,13 +137,25 @@ type SearchOptions struct {
 	// MaxTiltDeg is the largest allowed long-axis elevation. It applies
 	// only when the principal elongation is at least MinElongation.
 	MaxTiltDeg float64
+	// MaxPlateTiltDeg is the largest allowed angle between the plate normal
+	// (Principal.Axes[2]) and the vertical. It applies only when the
+	// principal flatness is under MaxPlateFlatness and the limit is under
+	// 90.
+	MaxPlateTiltDeg float64
 	// MinFirstLayerMM2 is the smallest allowed first-layer area.
 	MinFirstLayerMM2 float64
+	// MaxHeightMM is the largest allowed model height (Estimator.Height),
+	// tolerances included. Nil means no height limit.
+	MaxHeightMM *float64
 }
 
 // MinElongation is the Principal.Elongation below which a body has no long
 // axis, and the tilt limit does not apply.
 const MinElongation = 0.1
+
+// MaxPlateFlatness is the Principal.Flatness below which a body is a plate,
+// and the plate tilt limit applies.
+const MaxPlateFlatness = 0.2
 
 // Refinement constants. See Search.
 const (
@@ -148,13 +172,20 @@ const (
 type SearchStats struct {
 	// Constrained is true when the tilt limit applied.
 	Constrained bool `json:"tilt_limited"`
-	// Seeds counts the original, axis and face-down directions.
+	// PlateLimited is true when the plate tilt limit applied.
+	PlateLimited bool `json:"plate_limited"`
+	// Seeds counts the original, axis, face-down and principal-axis
+	// directions.
 	Seeds int `json:"seed_directions"`
 	// Swept counts the sweep directions.
 	Swept int `json:"sweep_directions"`
-	// Allowed counts seeds and sweep directions within the tilt limit,
-	// with the minimum first-layer area and no too-low overhang.
+	// Allowed counts seeds and sweep directions within both tilt limits and
+	// the height limit, with the minimum first-layer area and no too-low
+	// overhang.
 	Allowed int `json:"allowed_directions"`
+	// PlateExcluded counts seeds and sweep directions that meet every
+	// filter Allowed applies except the plate tilt limit.
+	PlateExcluded int `json:"plate_excluded_directions"`
 	// Refined counts finalists that refinement moved.
 	Refined int `json:"refined_finalists"`
 }
@@ -162,22 +193,32 @@ type SearchStats struct {
 // Search finds the down directions with the lowest estimated support cost.
 //
 //  1. Seeds: the original orientation (down = -Z), the six coordinate
-//     directions, and the normals of the opts.MaxPlanarFaces largest planar
-//     face clusters (a face put exactly on the plate).
+//     directions, the normals of the opts.MaxPlanarFaces largest planar
+//     face clusters (a face put exactly on the plate), and the six
+//     directions +-pr.Axes[i].
 //  2. Sweep: opts.Directions directions spread evenly over the sphere (a
 //     Fibonacci lattice).
-//  3. Every seed and sweep direction within the tilt limit whose first-layer
-//     area (Estimator.FirstLayer) is at least opts.MinFirstLayerMM2 is
-//     estimated, and kept when its estimate has no TooLowMM2. Directions are ranked by estimate (ties: lower elevation,
-//     then generation order), and the best opts.Finalists that are at least
-//     1 degree apart are kept.
+//  3. Every seed and sweep direction within the tilt limit, no taller
+//     (Estimator.Height) than *opts.MaxHeightMM when that is set, and
+//     whose first-layer area (Estimator.FirstLayer) is at least
+//     opts.MinFirstLayerMM2 is estimated, and kept when its estimate has no
+//     TooLowMM2 and it is within the plate tilt limit. Directions are
+//     ranked by estimate (ties:
+//     lower elevation, then generation order), and the best opts.Finalists
+//     that are at least 1 degree apart are kept.
 //  4. Each finalist is refined: its refineNeighbors neighbors at a step
 //     equal to the sweep spacing are estimated, and the best one that meets
 //     the same limits and is strictly cheaper replaces it; the step halves
 //     whenever no neighbor is cheaper, down to 0.25 degrees.
 //
+// The tilt limit applies when pr.Elongation is at least MinElongation and
+// opts.MaxTiltDeg is under 90. The plate tilt limit applies when
+// pr.Flatness is under MaxPlateFlatness and opts.MaxPlateTiltDeg is under
+// 90; it requires |pr.Axes[2] . d| >= cos(opts.MaxPlateTiltDeg).
+//
 // Search returns the original orientation first (its Allowed reflects the
-// tilt limit only) and then the finalists by ascending estimate. IDs follow
+// tilt limit only, its PlateAllowed the plate tilt limit only) and then the
+// finalists by ascending estimate. IDs follow
 // that order. A refined direction is never worse than the one it
 // started from, but the result is the best found at this resolution, not a
 // proven optimum.
@@ -191,8 +232,15 @@ func Search(ctx context.Context, m *mesh.Mesh, pr Principal, est *Estimator, opt
 	tiltOK := func(d r3.Vec) bool {
 		return !stats.Constrained || math.Abs(pr.Axes[0].Dot(d)) <= maxSin
 	}
+	stats.PlateLimited = pr.Flatness < MaxPlateFlatness && opts.MaxPlateTiltDeg < 90
+	minCos := math.Cos(opts.MaxPlateTiltDeg * math.Pi / 180)
+	plateOK := func(d r3.Vec) bool {
+		return !stats.PlateLimited || math.Abs(pr.Axes[2].Dot(d)) >= minCos
+	}
+	heightOK := func(d r3.Vec) bool { return opts.MaxHeightMM == nil || est.Height(d) <= *opts.MaxHeightMM }
+	firstLayerOK := func(d r3.Vec) bool { return est.FirstLayer(d) >= opts.MinFirstLayerMM2 }
 	allowed := func(d r3.Vec) bool {
-		return tiltOK(d) && est.FirstLayer(d) >= opts.MinFirstLayerMM2
+		return tiltOK(d) && plateOK(d) && heightOK(d) && firstLayerOK(d)
 	}
 	supportable := func(c Cost) bool { return c.TooLowMM2 == 0 }
 
@@ -220,6 +268,9 @@ func Search(ctx context.Context, m *mesh.Mesh, pr Principal, est *Estimator, opt
 		}
 		seeds = append(seeds, dir{d: c.normal, source: SourcePlanarFace, face: c})
 	}
+	for _, a := range pr.Axes {
+		seeds = append(seeds, dir{d: a, source: SourcePrincipal}, dir{d: a.Scale(-1), source: SourcePrincipal})
+	}
 	stats.Seeds = len(seeds)
 	sweep := fibonacciSphere(opts.Directions)
 	stats.Swept = len(sweep)
@@ -235,11 +286,17 @@ func Search(ctx context.Context, m *mesh.Mesh, pr Principal, est *Estimator, opt
 				return nil, SearchStats{}, err
 			}
 		}
-		if !allowed(s.d) {
+		// The plate limit is tested last, so a direction it alone rules
+		// out is counted in PlateExcluded.
+		if !tiltOK(s.d) || !heightOK(s.d) || !firstLayerOK(s.d) {
 			continue
 		}
 		s.cost = est.Estimate(s.d)
 		if !supportable(s.cost) {
+			continue
+		}
+		if !plateOK(s.d) {
+			stats.PlateExcluded++
 			continue
 		}
 		pool = append(pool, s)
@@ -315,15 +372,18 @@ func Search(ctx context.Context, m *mesh.Mesh, pr Principal, est *Estimator, opt
 	}
 	out := make([]Candidate, len(list))
 	for i, l := range list {
+		rot := faceDown(l.d)
 		out[i] = Candidate{
 			ID:           i,
 			Source:       l.source,
 			Down:         l.d,
-			Rotation:     faceDown(l.d),
+			Rotation:     rot,
 			FaceNormal:   l.face.normal,
 			FaceAreaMM2:  l.face.area,
 			ElevationDeg: elevation(l.d),
+			PlateTiltDeg: PlateNormalTilt(pr, rot),
 			Allowed:      tiltOK(l.d),
+			PlateAllowed: plateOK(l.d),
 			Estimate:     l.cost,
 		}
 	}

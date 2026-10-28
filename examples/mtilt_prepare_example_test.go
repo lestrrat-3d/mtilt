@@ -14,15 +14,16 @@ import (
 	"github.com/lestrrat-3d/units"
 )
 
-// bracket builds a Γ-shaped bracket: a 10 x 40 mm post with a 30 mm arm at
-// the top, 20 mm deep. The profile is drawn in the XY plane, extruded along
-// Z, and turned so the profile stands in the XZ plane.
-func bracket(ctx context.Context, w *sketch.World, doc *decad.Document) (*decad.Body, error) {
+// hookPlate builds a wall hook's mounting plate, 60 mm deep: a 70 x 4 mm
+// plate with a hook along one edge, whose arm reaches 12 mm past the plate's
+// edge at Z = 8 and ends in a lip. The profile is drawn in the XY plane,
+// extruded along Z, and turned so the profile stands in the XZ plane.
+func hookPlate(ctx context.Context, w *sketch.World, doc *decad.Document) (*decad.Body, error) {
 	s, err := w.CreateSketch(w.XY())
 	if err != nil {
 		return nil, err
 	}
-	outline := [][2]float64{{0, 0}, {10, 0}, {10, 30}, {40, 30}, {40, 40}, {0, 40}}
+	outline := [][2]float64{{0, 0}, {70, 0}, {70, 8}, {82, 8}, {82, 15}, {78, 15}, {78, 12}, {66, 12}, {66, 4}, {0, 4}}
 	pts := make([]*sketch.Point, len(outline))
 	for i, o := range outline {
 		pts[i] = s.CreatePoint(o[0], o[1])
@@ -34,11 +35,11 @@ func bracket(ctx context.Context, w *sketch.World, doc *decad.Document) (*decad.
 	if _, err := s.Solve(ctx); err != nil {
 		return nil, err
 	}
-	body, err := decad.Extrude(ctx, doc, s, s.Profiles()[0], decad.Distance{D: units.Millimeters(20), Dir: decad.Along})
+	body, err := decad.Extrude(ctx, doc, s, s.Profiles()[0], decad.Distance{D: units.Millimeters(60), Dir: decad.Along})
 	if err != nil {
 		return nil, err
 	}
-	stand, err := r3.FromBasis(r3.Basis{EX: r3.NewVec(1, 0, 0), EY: r3.NewVec(0, 0, 1), EZ: r3.NewVec(0, -1, 0)}, r3.NewVec(0, 20, 0))
+	stand, err := r3.FromBasis(r3.Basis{EX: r3.NewVec(1, 0, 0), EY: r3.NewVec(0, 0, 1), EZ: r3.NewVec(0, -1, 0)}, r3.NewVec(0, 60, 0))
 	if err != nil {
 		return nil, err
 	}
@@ -49,21 +50,28 @@ func Example_mtilt_prepare() {
 	ctx := context.Background()
 	w := sketch.NewWorld()
 	doc := decad.New()
-	body, err := bracket(ctx, w, doc)
+	body, err := hookPlate(ctx, w, doc)
 	if err != nil {
-		fmt.Printf("failed to build bracket: %s\n", err)
+		fmt.Printf("failed to build hook plate: %s\n", err)
 		return
 	}
 
-	// Keep the bracket upright so its arm, 30 mm above the plate, has to be
-	// supported.
-	res, err := mtilt.Prepare(ctx, body, mtilt.Options{Profile: mtilt.ExampleProfile(), KeepOrientation: true})
+	// mtilt chooses the orientation. The part is a plate, so it lies flat;
+	// upside down it would rest on the hook's lip, so it stays as drawn and
+	// pillars hold the hook's arm past the plate's edge.
+	res, err := mtilt.Prepare(ctx, body, mtilt.Options{Profile: mtilt.ExampleProfile()})
 	if err != nil {
 		fmt.Printf("failed to prepare: %s\n", err)
 		return
 	}
-	first := res.Report.Supports[0]
+	sel := res.Report.Candidates[*res.Report.Selected]
+	fmt.Printf("selected: candidate %d (%s), down (%.0f, %.0f, %.0f), height %.2f mm\n",
+		sel.ID, sel.Source, sel.Down[0], sel.Down[1], sel.Down[2], sel.Metrics.HeightMM)
 	fmt.Printf("support bodies: %d\n", len(res.Supports))
+	if len(res.Supports) == 0 {
+		return
+	}
+	first := res.Report.Supports[0]
 	fmt.Printf("first: %s at (%.2f, %.2f), top %.2f mm under a surface at %.2f mm\n",
 		first.ID, first.CenterMM[0], first.CenterMM[1], first.TopZMM, first.SurfaceZMM)
 
@@ -100,7 +108,8 @@ func Example_mtilt_prepare() {
 	}
 	fmt.Printf("files written: %d\n", len(files))
 	// Output:
-	// support bodies: 41
-	// first: support-0001 at (-7.75, -10.00), top 29.80 mm under a surface at 30.00 mm
-	// files written: 42
+	// selected: candidate 0 (original), down (0, 0, -1), height 15.00 mm
+	// support bodies: 46
+	// first: support-0001 at (31.25, -30.00), top 7.80 mm under a surface at 8.00 mm
+	// files written: 47
 }
