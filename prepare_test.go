@@ -21,6 +21,12 @@ import (
 
 type shape func(*fixture.Bodies, context.Context) (*decad.Body, error)
 
+// Support kinds as SupportReport.Kind names them.
+const (
+	kindBranch = "branch"
+	kindTree   = "tree"
+)
+
 func newBody(t *testing.T, f shape) *decad.Body {
 	t.Helper()
 	b, err := f(fixture.NewBodies(), t.Context())
@@ -184,7 +190,7 @@ func TestPrepare(t *testing.T) {
 			// The base covers the whole footprint under the arm, so every
 			// support is a branch or a tree whose foot stands outside the
 			// model's bounding box in X or Y.
-			require.Contains(t, []string{"branch", "tree"}, sr.Kind)
+			require.Contains(t, []string{kindBranch, kindTree}, sr.Kind)
 			require.NotNil(t, sr.FootMM)
 			f := *sr.FootMM
 			outside := f[0] > mb.Max.X || f[0] < mb.Min.X || f[1] > mb.Max.Y || f[1] < mb.Min.Y
@@ -195,7 +201,7 @@ func TestPrepare(t *testing.T) {
 		requirePassed(t, res.Report.Validation, "decad_support_lumps")
 		trees, tips := 0, 0
 		for _, sr := range res.Report.Supports {
-			if sr.Kind == "tree" {
+			if sr.Kind == kindTree {
 				trees++
 				tips += len(sr.TipsMM)
 				continue
@@ -642,6 +648,128 @@ func TestPrepareOcclusion(t *testing.T) {
 		b, err := json.Marshal(c.Occlusion)
 		require.NoError(t, err)
 		require.JSONEq(t, `{"samples":null,"occluded_samples":null,"occluded_grid_area_mm2":null}`, string(b))
+	})
+}
+
+// requireNoSupportFreePose checks that no allowed orientation of the search
+// needs no support. The finalists are the allowed directions with the
+// lowest estimated cost, and refinement only lowers it, so a positive
+// estimate on every allowed candidate holds for every allowed direction the
+// search tried. Every plan that succeeded also placed supports.
+func requireNoSupportFreePose(t *testing.T, rep mtilt.Report) {
+	t.Helper()
+	allowed := 0
+	for _, c := range rep.Candidates {
+		if !c.TiltAllowed || !c.PlateAllowed {
+			continue
+		}
+		allowed++
+		require.Positive(t, c.Estimate.ContactMM2, "candidate %d", c.ID)
+		require.NotEqual(t, mtilt.AttemptNotNeeded, c.Attempt.Status, "candidate %d", c.ID)
+		if c.Attempt.Status == mtilt.AttemptSucceeded {
+			require.Positive(t, c.Attempt.Supports, "candidate %d", c.ID)
+		}
+	}
+	require.Positive(t, allowed)
+}
+
+// requireSearchedPose checks the selected candidate of a search: its ID,
+// its down direction, its height, and its long axis's elevation, which
+// must also be within the default tilt limit.
+func requireSearchedPose(t *testing.T, res *mtilt.Result, id int, height, elevation float64) mtilt.CandidateReport {
+	t.Helper()
+	require.Equal(t, "optimize", res.Report.Mode)
+	sel := selected(res)
+	require.Equal(t, id, sel.ID)
+	require.Equal(t, [3]float64{0, 0, -1}, sel.Down)
+	// The height is measured on the tessellation, which a union can leave
+	// a fraction of a micrometer off the exact solid.
+	require.InDelta(t, height, sel.Metrics.HeightMM, 1e-3)
+	require.InDelta(t, elevation, sel.Metrics.LongAxisElevationDeg, 0.05)
+	require.LessOrEqual(t, sel.Metrics.LongAxisElevationDeg, float64(mtilt.DefaultMaxLongAxisTiltDeg))
+	requireNoFailedCheck(t, res.Report)
+	requirePassed(t, res.Report.Validation, "decad_interference")
+	requirePassed(t, res.Report.Validation, "decad_body_validity")
+	return sel
+}
+
+func TestPrepareSearchedSupports(t *testing.T) {
+	t.Run("the mounting bracket lies flat and pillars hold its hook's arm", func(t *testing.T) {
+		res, err := prepare(t, newBody(t, (*fixture.Bodies).MountingBracket), mtilt.Options{})
+		require.NoError(t, err)
+		require.True(t, res.Report.Objective.PlateLimited)
+		require.Equal(t, 6, res.Report.Search.Allowed)
+		requireNoSupportFreePose(t, res.Report)
+		sel := requireSearchedPose(t, res, 0, 15, 5.4)
+		require.Len(t, res.Supports, 46)
+		require.Zero(t, sel.Attempt.BridgedSamples)
+		mb, err := res.Model.Bounds()
+		require.NoError(t, err)
+		for _, sr := range res.Report.Supports {
+			// Every pillar stands past the plate's edge at X = 70, under
+			// the arm's underside at Z = 8.
+			require.Equal(t, "pillar", sr.Kind)
+			require.Greater(t, sr.CenterMM[0], mb.Min.X+70)
+			require.InDelta(t, 8, sr.SurfaceZMM, 1e-6)
+		}
+	})
+
+	t.Run("the bridge-ledge part lies flat; its 8 mm span is bridged and its ledge gets pillars", func(t *testing.T) {
+		res, err := prepare(t, newBody(t, (*fixture.Bodies).BridgeLedge), mtilt.Options{})
+		require.NoError(t, err)
+		require.True(t, res.Report.Objective.PlateLimited)
+		require.Equal(t, 6, res.Report.Search.Allowed)
+		requireNoSupportFreePose(t, res.Report)
+		sel := requireSearchedPose(t, res, 0, 14, 8.0)
+		require.Len(t, res.Supports, 61)
+		require.Equal(t, 427, sel.Attempt.BridgedSamples)
+		require.Equal(t, 183, sel.Attempt.HeldSamples)
+		mb, err := res.Model.Bounds()
+		require.NoError(t, err)
+		for _, sr := range res.Report.Supports {
+			// No pillar stands in the span (X 60..68); all of them are
+			// past the leg's outer face at X = 72, under the ledge.
+			require.Equal(t, "pillar", sr.Kind)
+			require.Greater(t, sr.CenterMM[0], mb.Min.X+72)
+			require.InDelta(t, 10, sr.SurfaceZMM, 1e-6)
+		}
+	})
+
+	t.Run("the housing stays upright and branches reach under its top", func(t *testing.T) {
+		res, err := prepare(t, newBody(t, (*fixture.Bodies).Housing), mtilt.Options{})
+		require.NoError(t, err)
+		require.True(t, res.Report.Objective.TiltLimited)
+		require.False(t, res.Report.Objective.PlateLimited)
+		require.Equal(t, 5, res.Report.Search.Allowed)
+		requireNoSupportFreePose(t, res.Report)
+		sel := requireSearchedPose(t, res, 0, 38, 8.3)
+		requirePassed(t, res.Report.Validation, "decad_support_lumps")
+		_, occluded, _ := occlusionOf(t, sel)
+		require.InDelta(t, 800, occluded, 1)
+		require.Zero(t, sel.Attempt.UncoveredCount)
+		require.Equal(t, 47, sel.Attempt.Supports)
+
+		mb, err := res.Model.Bounds()
+		require.NoError(t, err)
+		kinds := map[string]int{}
+		tips := 0
+		for i, sr := range res.Report.Supports {
+			// The base lies under the whole top, so every support's foot
+			// stands outside the model's bounding box.
+			require.Contains(t, []string{kindBranch, kindTree}, sr.Kind)
+			require.NotNil(t, sr.FootMM)
+			f := *sr.FootMM
+			outside := f[0] > mb.Max.X || f[0] < mb.Min.X || f[1] > mb.Max.Y || f[1] < mb.Min.Y
+			require.True(t, outside, "support %d foot %v is under the model", i+1, f)
+			kinds[sr.Kind]++
+			if sr.Kind == kindTree {
+				tips += len(sr.TipsMM)
+				continue
+			}
+			tips++
+		}
+		require.Equal(t, map[string]int{kindBranch: 17, kindTree: 13}, kinds)
+		require.Equal(t, sel.Attempt.Supports, tips)
 	})
 }
 
