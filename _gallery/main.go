@@ -47,16 +47,15 @@ type shot struct {
 }
 
 func shots() []shot {
-	keep := mtilt.Options{Profile: mtilt.ExampleProfile(), KeepOrientation: true}
 	search := mtilt.Options{Profile: mtilt.ExampleProfile()}
 	return []shot{
 		{name: "oblique-cuboid", body: (*fixture.Bodies).ObliqueCuboid, opts: search},
 		{name: "stick", body: (*fixture.Bodies).Stick, opts: search},
 		{name: "nail", body: (*fixture.Bodies).Nail, opts: search},
 		{name: "channel-plate", body: (*fixture.Bodies).ChannelPlate, opts: search},
-		{name: "bracket-kept", body: (*fixture.Bodies).Bracket, opts: keep},
-		{name: "bridge-kept", body: (*fixture.Bodies).Bridge, opts: keep},
-		{name: "occluded-kept", body: (*fixture.Bodies).Occluded, opts: keep},
+		{name: "bracket", body: (*fixture.Bodies).MountingBracket, opts: search},
+		{name: "bridge-ledge", body: (*fixture.Bodies).BridgeLedge, opts: search},
+		{name: "housing", body: (*fixture.Bodies).Housing, opts: search},
 	}
 }
 
