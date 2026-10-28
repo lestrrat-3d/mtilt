@@ -35,17 +35,24 @@ The square stick is laid down.
 
 ![A stick standing on its end, then lying flat](docs/images/stick.png)
 
-The bracket and the bridge are kept upright (`KeepOrientation`) to show the pillars under an overhang and under a
-span: 41 and 37 pillars.
+The mounting bracket is a 4 mm plate with a boss and a hook along one edge. As a plate it lies flat, and the search
+keeps the side it was given: upside down it would rest on the hook's lip with the whole plate above the bed. 46
+pillars hold the hook's arm where it reaches 12 mm past the plate's edge.
 
-![A bracket with its arm held up by gold pillars](docs/images/bracket-kept.png)
+![A flat plate with a boss and an edge hook, then the same plate with gold pillars under the hook's arm](docs/images/bracket.png)
 
-![A bridge with its span held up by gold pillars](docs/images/bridge-kept.png)
+The bridge-ledge part is a plate with a deck along one edge. The deck spans 8 mm from the plate's edge to a leg,
+then reaches 18 mm past the leg. The span is under `max_bridge_mm`, so it gets no pillars; 61 pillars hold the
+ledge past the leg.
 
-The ⊐-shaped part, kept upright, has an arm over its own base, so no straight pillar reaches the arm. Trees stand
-beside the base and branch in under it: 39 tips on 24 bodies.
+![A plate with a deck over a narrow gap and a ledge, then gold pillars under the ledge only](docs/images/bridge-ledge.png)
 
-![A C-shaped part whose top arm is held by gold trees that branch in from beside its base](docs/images/occluded-kept.png)
+The ⊐-shaped housing has its top over its base, so no straight pillar reaches the top's underside. Its mounting
+plate stands 2 mm proud of the back and both sides, and its top reaches 2 mm past the base: on its back, a side or
+its front, a face would hang 2 mm over the bed, too low for any pillar. The search keeps it upright, and 17
+branches and 13 trees stand beside the base and lean in under the top: 47 tips on 30 bodies.
+
+![A C-shaped housing, then gold branches and trees that lean in from beside its base under its top](docs/images/housing.png)
 
 ## What it does now
 
